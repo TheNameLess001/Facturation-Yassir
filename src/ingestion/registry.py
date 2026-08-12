@@ -84,6 +84,20 @@ class SourceManifestRegistry:
                 )
         return missing
 
+    def mark_inaccessible(
+        self, source_type: SourceType, *, checked_at: datetime | None = None
+    ) -> tuple[SourceFileManifest, ...]:
+        """Preserve known manifests when their source location cannot be checked."""
+        checked_at = checked_at or datetime.now(UTC)
+        known = self.list_by_source(source_type)
+        with self._connect() as connection:
+            for item in known:
+                connection.execute(
+                    "UPDATE source_manifests SET status=?, last_checked_at=? WHERE drive_file_id=?",
+                    (ChangeState.INACCESSIBLE.value, checked_at.isoformat(), item.drive_file_id),
+                )
+        return known
+
     def get(self, file_id: str) -> SourceFileManifest | None:
         with self._connect() as connection:
             row = connection.execute(

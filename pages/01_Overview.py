@@ -1,15 +1,15 @@
 import streamlit as st
 
-from src.ingestion.models import SourceDiscoveryResult
-from src.ingestion.runtime import discover_configured_sources
-from src.models.enums import HealthState, SourceType
+from src.ingestion.phase2_models import Phase2DiscoveryResult
+from src.ingestion.phase2_runtime import discover_phase2_sources
+from src.models.enums import HealthState
 from src.ui.layout import page_setup, period_banner, render_kpis
 from src.ui.mock_data import EMAIL_FUNNEL, KPI_ITEMS, WORKFLOW, billing_rows
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def load_compact_source_health() -> SourceDiscoveryResult:
-    return discover_configured_sources("2026-08-P1")
+def load_compact_source_health() -> Phase2DiscoveryResult:
+    return discover_phase2_sources()
 
 
 page_setup("Overview")
@@ -69,30 +69,23 @@ st.markdown(
 
 st.markdown('<div class="cc-section">Data source health</div>', unsafe_allow_html=True)
 source_result = load_compact_source_health()
-health_columns = st.columns(4)
-for column, source_type in zip(health_columns[:3], SourceType, strict=True):
-    has_blocker = any(
-        item.source_type == source_type for item in source_result.blocking_errors
-    )
-    has_warning = any(
-        item.source_type == source_type for item in source_result.warnings
-    )
-    if has_blocker:
-        health, badge_tone = HealthState.BLOCKING, "danger"
-    elif has_warning:
-        health, badge_tone = HealthState.WARNING, "warning"
-    elif any(item.source_type == source_type for item in source_result.files):
-        health, badge_tone = HealthState.HEALTHY, "success"
-    else:
-        health, badge_tone = HealthState.UNKNOWN, "neutral"
+health_columns = st.columns(5)
+source_cards = (
+    ("Drive", source_result.connection_state.value, source_result.health.google_connection),
+    ("Admin Earnings", f"{len(source_result.valid_admin_files)} files", source_result.health.admin_earnings),
+    ("Finance", "Ready" if source_result.finance_tracking else "Not ready", source_result.health.finance_tracking),
+    ("RST", "Ready" if source_result.rst_list else "Not ready", source_result.health.rst_list),
+)
+for column, (label, value, health) in zip(health_columns[:4], source_cards, strict=True):
+    badge_tone = "success" if health == HealthState.HEALTHY else "danger" if health == HealthState.BLOCKING else "warning"
     with column:
         st.markdown(
-            f'<div class="cc-card"><div class="cc-kpi-label">{source_type.value.replace("_", " ")}</div>'
-            f'<div style="margin-top:10px"><span class="cc-status {badge_tone}">{health.value}</span></div>'
-            f'<div class="cc-kpi-note">{source_result.connection_state.value}</div></div>',
+            f'<div class="cc-card"><div class="cc-kpi-label">{label}</div>'
+            f'<div style="margin-top:10px"><span class="cc-status {badge_tone}">{value}</span></div>'
+            f'<div class="cc-kpi-note">REAL metadata · {health.value}</div></div>',
             unsafe_allow_html=True,
         )
-with health_columns[3]:
+with health_columns[4]:
     st.markdown(
         f'<div class="cc-card"><div class="cc-kpi-label">Last Drive check</div>'
         f'<div class="cc-kpi-value" style="font-size:1.1rem">{source_result.last_checked_at:%H:%M}</div>'

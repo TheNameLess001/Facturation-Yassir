@@ -1,6 +1,6 @@
 # CashCo V2 — Partner Billing Control Tower
 
-CashCo V2 is a controlled billing and settlement workspace for restaurant partners. The application currently remains in its safe pre-Phase 2 state: automation is `OFF`, it is waiting for Admin authorization, and no source ingestion, Drive write, document, or email workflow is enabled.
+CashCo V2 is a controlled billing and settlement workspace for restaurant partners. Phase 2 connects to Google Drive for metadata-only source discovery and access health. Automation remains `OFF`, awaiting Admin authorization, and no row ingestion, Drive write workflow, document, or email workflow is enabled.
 
 ## Architecture and source boundaries
 
@@ -90,6 +90,6 @@ python -m compileall -q app.py pages src tests
 git diff --check
 ```
 
-## Phase boundary
+## Phase 2 boundary
 
-This repository configuration prepares the secure environment for Phase 2. It does not connect to Drive, discover or parse sources, generate Google Sheets or documents, send email, or enable automation.
+The Data Sources page validates the real service-account connection, checks each configured Drive location independently, inventories strictly named Admin Earnings CSV/XLSX files, and maintains a metadata-only manifest. It does not parse source rows, normalize or deduplicate orders, parse Finance/RST content, calculate settlements, generate Google Sheets or documents, send email, or enable automation.

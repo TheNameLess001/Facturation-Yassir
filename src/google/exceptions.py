@@ -6,6 +6,10 @@ class GoogleAuthenticationError(GoogleIntegrationError):
     pass
 
 
+class GoogleConfigurationError(GoogleAuthenticationError):
+    pass
+
+
 class DriveConnectionError(GoogleIntegrationError):
     pass
 
@@ -15,6 +19,10 @@ class DrivePermissionError(GoogleIntegrationError):
 
 
 class DriveFileNotFoundError(GoogleIntegrationError):
+    pass
+
+
+class DriveFolderNotFoundError(DriveFileNotFoundError):
     pass
 
 

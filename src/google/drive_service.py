@@ -11,17 +11,22 @@ from googleapiclient.http import MediaIoBaseDownload
 from src.google.exceptions import (
     DriveConnectionError,
     DriveFileNotFoundError,
+    DriveFolderNotFoundError,
     DrivePermissionError,
+    GoogleAuthenticationError,
 )
 from src.google.models import (
     FOLDER_MIME_TYPE,
+    AccessLevel,
+    DriveAccessResult,
     DriveConnectionResult,
     DriveFile,
 )
 
 LOGGER = logging.getLogger(__name__)
 FILE_FIELDS = (
-    "id,name,mimeType,modifiedTime,createdTime,size,md5Checksum,parents,webViewLink"
+    "id,name,mimeType,modifiedTime,createdTime,size,md5Checksum,parents,webViewLink,"
+    "capabilities(canAddChildren,canEdit,canDownload)"
 )
 
 
@@ -62,8 +67,70 @@ class GoogleDriveService:
     def get_folder_metadata(self, folder_id: str) -> DriveFile:
         item = self.get_file_metadata(folder_id)
         if not item.is_folder:
-            raise DriveFileNotFoundError("Configured Drive folder is not a folder")
+            raise DriveFolderNotFoundError("Configured Drive folder is not a folder")
         return item
+
+    def check_access(
+        self, object_id: str | None, *, location: str, folder: bool, require_write: bool
+    ) -> DriveAccessResult:
+        """Inspect metadata/capabilities without mutating the Drive object."""
+        if not object_id:
+            return DriveAccessResult(
+                location=location,
+                access=AccessLevel.NOT_CONFIGURED,
+                message=f"{location} is not configured.",
+            )
+        try:
+            item = (
+                self.get_folder_metadata(object_id)
+                if folder
+                else self.get_file_metadata(object_id)
+            )
+            writable = bool(
+                item.capabilities.get("canAddChildren")
+                if folder
+                else item.capabilities.get("canEdit")
+            )
+            if require_write and not writable:
+                return DriveAccessResult(
+                    location=location,
+                    object_id=object_id,
+                    access=AccessLevel.READ_ONLY,
+                    readable=True,
+                    writable=False,
+                    object=item,
+                    message=f"{location} is readable but write access was not confirmed.",
+                )
+            return DriveAccessResult(
+                location=location,
+                object_id=object_id,
+                access=AccessLevel.READ_WRITE if require_write else AccessLevel.READABLE,
+                readable=True,
+                writable=writable if require_write else None,
+                object=item,
+            )
+        except DrivePermissionError:
+            LOGGER.warning("drive_permission_failure", extra={"location": location})
+            return DriveAccessResult(
+                location=location,
+                object_id=object_id,
+                access=AccessLevel.INACCESSIBLE,
+                message=f"{location} is configured but CashCo does not have permission to read it.",
+            )
+        except DriveFileNotFoundError:
+            return DriveAccessResult(
+                location=location,
+                object_id=object_id,
+                access=AccessLevel.INACCESSIBLE,
+                message=f"{location} could not be found.",
+            )
+        except DriveConnectionError:
+            return DriveAccessResult(
+                location=location,
+                object_id=object_id,
+                access=AccessLevel.INACCESSIBLE,
+                message=f"{location} could not be checked because Drive is unavailable.",
+            )
 
     def find_files(
         self, folder_id: str, *, name_contains: str | None = None
@@ -148,6 +215,8 @@ class GoogleDriveService:
             return DriveFileNotFoundError(
                 f"Drive object not found: {file_id or 'unknown'}"
             )
-        if status in {401, 403}:
+        if status == 401:
+            return GoogleAuthenticationError("Google Drive authentication failed")
+        if status == 403:
             return DrivePermissionError("Google Drive permission denied")
         return DriveConnectionError("Google Drive request failed")

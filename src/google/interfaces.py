@@ -2,7 +2,7 @@
 
 from typing import Any, Protocol, runtime_checkable
 
-from src.google.models import DriveConnectionResult, DriveFile
+from src.google.models import DriveAccessResult, DriveConnectionResult, DriveFile
 
 
 @runtime_checkable
@@ -17,6 +17,9 @@ class ReadOnlyDriveService(Protocol):
     def file_exists(self, file_id: str) -> bool: ...
     def download_file(self, file_id: str) -> bytes: ...
     def test_connection(self, root_folder_id: str) -> DriveConnectionResult: ...
+    def check_access(
+        self, object_id: str | None, *, location: str, folder: bool, require_write: bool
+    ) -> DriveAccessResult: ...
 
 
 DriveService = ReadOnlyDriveService

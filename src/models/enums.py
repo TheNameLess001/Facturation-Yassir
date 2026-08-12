@@ -61,6 +61,7 @@ class AuditLevel(StrEnum):
 class SourceType(StrEnum):
     ADMIN_EARNINGS = "ADMIN_EARNINGS"
     PAYMENT_SCOPE = "PAYMENT_SCOPE"
+    FINANCE_TRACKING = "FINANCE_TRACKING"
     RST_LIST = "RST_LIST"
 
 
@@ -92,6 +93,8 @@ class ConnectionState(StrEnum):
     CONNECTED = "CONNECTED"
     MOCK = "MOCK"
     NOT_CONFIGURED = "NOT_CONFIGURED"
+    CONFIG_ERROR = "CONFIG_ERROR"
+    AUTH_ERROR = "AUTH_ERROR"
     ERROR = "ERROR"
 
 
@@ -105,6 +108,7 @@ class IngestionStatus(StrEnum):
 class DuplicateKind(StrEnum):
     EXACT = "EXACT"
     CONFLICTING = "CONFLICTING"
+    CONFLICTING_DUPLICATE = "CONFLICTING_DUPLICATE"
 
 
 class EligibilityState(StrEnum):

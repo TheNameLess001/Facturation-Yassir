@@ -4,7 +4,7 @@ from unittest.mock import Mock
 import pytest
 from googleapiclient.errors import HttpError
 
-from src.google.drive_service import GoogleDriveService
+from src.google.drive_service import FILE_FIELDS, GoogleDriveService
 from src.google.exceptions import DrivePermissionError
 from src.google.models import FOLDER_MIME_TYPE
 
@@ -40,7 +40,7 @@ def test_drive_service_metadata_normalization() -> None:
     assert result.parent_ids == ("folder-1",)
     files.get.assert_called_once_with(
         fileId="file-1",
-        fields="id,name,mimeType,modifiedTime,createdTime,size,md5Checksum,parents,webViewLink",
+        fields=FILE_FIELDS,
         supportsAllDrives=True,
     )
 

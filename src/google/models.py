@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
@@ -10,6 +11,7 @@ SUPPORTED_SOURCE_MIME_TYPES = frozenset(
         "text/csv",
         "application/csv",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.google-apps.spreadsheet",
     }
 )
 
@@ -27,6 +29,7 @@ class DriveFile(BaseModel):
     parent_ids: tuple[str, ...] = ()
     web_view_link: str | None = None
     is_folder: bool = False
+    capabilities: dict[str, bool] = {}
 
     @classmethod
     def from_api(cls, value: dict[str, object]) -> DriveFile:
@@ -52,6 +55,10 @@ class DriveFile(BaseModel):
             if value.get("webViewLink")
             else None,
             is_folder=mime_type == FOLDER_MIME_TYPE,
+            capabilities={
+                str(key): bool(item)
+                for key, item in dict(value.get("capabilities", {})).items()  # type: ignore[arg-type]
+            },
         )
 
 
@@ -60,3 +67,23 @@ class DriveConnectionResult(BaseModel):
 
     connected: bool
     root_name: str | None = None
+
+
+class AccessLevel(StrEnum):
+    READABLE = "READABLE"
+    READ_WRITE = "READ / WRITE"
+    READ_ONLY = "READ ONLY"
+    INACCESSIBLE = "INACCESSIBLE"
+    NOT_CONFIGURED = "NOT_CONFIGURED"
+
+
+class DriveAccessResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    location: str
+    object_id: str | None = None
+    access: AccessLevel
+    readable: bool = False
+    writable: bool | None = None
+    object: DriveFile | None = None
+    message: str | None = None
