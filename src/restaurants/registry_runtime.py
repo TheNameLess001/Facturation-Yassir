@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+from collections import Counter, defaultdict
 
 import pandas as pd
 
@@ -35,7 +36,9 @@ def run_restaurant_registry(
         active_worksheet=settings.invoice_scope_worksheet,
     )
     rst = reader.read_rst(settings.rst_list_file_id)
-    order_counts = _load_canonical_order_counts(active_drive, settings)
+    order_counts, order_names = _load_canonical_order_diagnostics(
+        active_drive, settings
+    )
     result = RestaurantRegistryBuilder().build(
         invoice.frame,
         rst.frame,
@@ -44,6 +47,7 @@ def run_restaurant_registry(
         invoice_scope_column_map=settings.invoice_scope_column_map,
         rst_column_map=settings.rst_column_map,
         canonical_order_counts=order_counts,
+        canonical_order_names=order_names,
     )
     LOGGER.info(
         "restaurant_registry_built",
@@ -56,11 +60,11 @@ def run_restaurant_registry(
     return result
 
 
-def _load_canonical_order_counts(
+def _load_canonical_order_diagnostics(
     drive: ReadOnlyDriveService, settings: Settings
-) -> dict[str, int]:
+) -> tuple[dict[str, int], dict[str, str]]:
     if not settings.processed_folder_id:
-        return {}
+        return {}, {}
     matches = tuple(
         item
         for item in drive.list_files(settings.processed_folder_id)
@@ -72,6 +76,30 @@ def _load_canonical_order_counts(
         )
     frame = pd.read_parquet(io.BytesIO(drive.download_file(matches[0].file_id)))
     if "restaurant_id" not in frame.columns:
-        return {}
-    normalized = frame["restaurant_id"].map(normalize_identifier).dropna()
-    return {str(key): int(value) for key, value in normalized.value_counts().items()}
+        return {}, {}
+    normalized = frame["restaurant_id"].map(normalize_identifier)
+    counts = {
+        str(key): int(value)
+        for key, value in normalized.dropna().value_counts().items()
+    }
+    if "restaurant_name" not in frame.columns:
+        return counts, {}
+    observed_names: dict[str, Counter[str]] = defaultdict(Counter)
+    for restaurant_id, restaurant_name in zip(
+        normalized,
+        frame["restaurant_name"],
+        strict=True,
+    ):
+        if restaurant_id is None or pd.isna(restaurant_name):
+            continue
+        name = str(restaurant_name).strip()
+        if name:
+            observed_names[str(restaurant_id)][name] += 1
+    names = {
+        restaurant_id: min(
+            frequencies.items(),
+            key=lambda item: (-item[1], item[0].casefold()),
+        )[0]
+        for restaurant_id, frequencies in observed_names.items()
+    }
+    return counts, names

@@ -38,6 +38,38 @@ class SuggestionStrength(StrEnum):
     NOT_REQUIRED = "NOT_REQUIRED"
 
 
+class CorrectionConfidence(StrEnum):
+    HIGH_CONFIDENCE = "HIGH_CONFIDENCE"
+    MEDIUM_CONFIDENCE = "MEDIUM_CONFIDENCE"
+    LOW_CONFIDENCE = "LOW_CONFIDENCE"
+    NO_CANDIDATE = "NO_CANDIDATE"
+    NOT_REQUIRED = "NOT_REQUIRED"
+
+
+class ScopeConflictReason(StrEnum):
+    NAME_CONFLICT = "NAME_CONFLICT"
+    CITY_CONFLICT = "CITY_CONFLICT"
+    COMMISSION_CONFLICT = "COMMISSION_CONFLICT"
+    MULTI_FIELD_CONFLICT = "MULTI_FIELD_CONFLICT"
+    OTHER = "OTHER"
+
+
+class ConflictInterpretation(StrEnum):
+    SAME_STORE_DUPLICATED = "SAME_STORE_DUPLICATED"
+    DIFFERENT_STORES_SHARING_ID = "DIFFERENT_STORES_INCORRECTLY_SHARING_ONE_ID"
+    OLD_NEW_RESTAURANT_NAMING = "OLD_NEW_RESTAURANT_NAMING"
+    DATA_ENTRY_ERROR = "DATA_ENTRY_ERROR"
+    UNCERTAIN = "UNCERTAIN"
+
+
+class NoIdClassification(StrEnum):
+    EXACT_NAME_MAPPED = "EXACT_NAME_MAPPED"
+    AMBIGUOUS = "AMBIGUOUS"
+    UNMATCHED = "UNMATCHED"
+    CONFLICTING_OR_DUPLICATE = "CONFLICTING_OR_DUPLICATE"
+    OTHER = "OTHER"
+
+
 class WorksheetSchemaProfile(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -101,6 +133,9 @@ class ScopeSourceRow(BaseModel):
     restaurant_name: str | None = None
     restaurant_id: str | None = None
     city: str | None = None
+    area: str | None = None
+    phone: str | None = None
+    email: str | None = None
     commission_rate: Decimal | None = None
     comment: str | None = None
     extra_fields: dict[str, str | None] = Field(default_factory=dict)
@@ -114,17 +149,31 @@ class RestaurantCandidate(BaseModel):
     city: str | None = None
     area: str | None = None
     chain: str | None = None
+    address: str | None = None
     store_type: str | None = None
     status: str | None = None
     commission_rate: Decimal | None = None
     email: str | None = None
+    phone: str | None = None
+    admin_restaurant_name: str | None = None
     canonical_order_count: int = 0
     name_similarity: float
     same_city: bool = False
     chain_signal: bool = False
     token_overlap: float = 0.0
     advisory_score: float
+    confidence: CorrectionConfidence
     similarity_indicators: tuple[str, ...] = ()
+
+
+class CopyFixData(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    scope_row: int
+    current_restaurant_id: str | None = None
+    suggested_restaurant_id: str | None = None
+    suggested_restaurant_name: str | None = None
+    suggested_city: str | None = None
 
 
 class MappingReviewCase(BaseModel):
@@ -139,6 +188,11 @@ class MappingReviewCase(BaseModel):
     conflict_fields: tuple[str, ...] = ()
     issue_codes: tuple[str, ...] = ()
     suggestion_strength: SuggestionStrength = SuggestionStrength.NOT_REQUIRED
+    correction_confidence: CorrectionConfidence = CorrectionConfidence.NOT_REQUIRED
+    conflict_reason: ScopeConflictReason | None = None
+    conflict_interpretation: ConflictInterpretation | None = None
+    scope_id_rst_candidate: RestaurantCandidate | None = None
+    copy_fix: CopyFixData
 
     @property
     def likely_candidate(self) -> RestaurantCandidate | None:
@@ -184,6 +238,7 @@ class RegisteredRestaurant(BaseModel):
     data_quality_status: DataQualityStatus
     admin_orders_available: bool = False
     canonical_order_count: int = 0
+    admin_restaurant_name: str | None = None
     issue_codes: tuple[str, ...] = ()
     readiness: RestaurantReadiness
 
@@ -222,3 +277,37 @@ class RestaurantRegistryResult(BaseModel):
     @property
     def ready_for_settlement_mapping(self) -> bool:
         return self.blocking_mapping_issues == 0
+
+    @property
+    def identity_ready_restaurants(self) -> tuple[RegisteredRestaurant, ...]:
+        """Future settlement evaluation population; no financial logic is applied."""
+        return tuple(item for item in self.restaurants if item.readiness.identity_ready)
+
+    @property
+    def identity_blocked_restaurants(self) -> tuple[RegisteredRestaurant, ...]:
+        return tuple(item for item in self.restaurants if not item.readiness.identity_ready)
+
+    def no_id_row_counts(self) -> dict[NoIdClassification, int]:
+        counts = {item: 0 for item in NoIdClassification}
+        for case in self.mapping_cases:
+            for row in case.scope_rows:
+                if row.restaurant_id is not None:
+                    continue
+                if case.mapping_status in {
+                    MappingStatus.CONFLICTING_SCOPE,
+                    MappingStatus.DUPLICATE_SCOPE,
+                }:
+                    classification = NoIdClassification.CONFLICTING_OR_DUPLICATE
+                elif (
+                    case.mapping_method.startswith("EXACT_UNIQUE_NAME")
+                    and case.identity_ready
+                ):
+                    classification = NoIdClassification.EXACT_NAME_MAPPED
+                elif "AMBIGUOUS_RESTAURANT_MAPPING" in case.issue_codes:
+                    classification = NoIdClassification.AMBIGUOUS
+                elif "UNMATCHED_SCOPE_RESTAURANT" in case.issue_codes:
+                    classification = NoIdClassification.UNMATCHED
+                else:
+                    classification = NoIdClassification.OTHER
+                counts[classification] += 1
+        return counts

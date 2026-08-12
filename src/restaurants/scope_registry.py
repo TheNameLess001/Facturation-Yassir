@@ -14,10 +14,13 @@ from src.ingestion.admin_earnings_normalizer import (
 )
 from src.restaurants.mapping_review import (
     CandidateRankingService,
+    classify_scope_conflict,
     conflicting_scope_fields,
     materially_different_restaurant_names,
 )
 from src.restaurants.registry_models import (
+    CopyFixData,
+    CorrectionConfidence,
     DataQualityStatus,
     InvoiceScopeSchemaProfile,
     MappingReviewCase,
@@ -37,6 +40,9 @@ INVOICE_SCOPE_ALIASES: dict[str, tuple[str, ...]] = {
     # ``Column 1`` was confirmed from the real CASH-CO worksheet on 2026-08-12.
     "restaurant_name": ("column 1", "restaurant name", "restaurant", "store name"),
     "city": ("city", "ville"),
+    "area": ("area", "zone", "sub city"),
+    "phone": ("phone", "telephone", "téléphone"),
+    "email": ("email",),
     "commission_rate": ("commission", "comission", "commission %"),
     "comment": ("comment", "comments", "commentaire"),
     "in_scope": ("to invoice", "billing enabled", "invoice enabled", "active"),
@@ -122,6 +128,7 @@ class RestaurantRegistryBuilder:
         rst_column_map: dict[str, str] | None = None,
         alias_map: dict[str, str] | None = None,
         canonical_order_counts: dict[str, int] | None = None,
+        canonical_order_names: dict[str, str] | None = None,
     ) -> RestaurantRegistryResult:
         scope_mapping = resolve_columns(
             invoice_scope.columns,
@@ -147,6 +154,7 @@ class RestaurantRegistryBuilder:
         restaurants: list[RegisteredRestaurant] = []
         mapping_cases: list[MappingReviewCase] = []
         order_counts = canonical_order_counts or {}
+        order_names = canonical_order_names or {}
         ranker = CandidateRankingService()
         for case_key, records in groups.items():
             source = records[0]
@@ -195,6 +203,7 @@ class RestaurantRegistryBuilder:
                 method,
                 restaurant_issues,
                 order_counts,
+                order_names,
             )
             restaurants.append(result)
             needs_review = (
@@ -202,11 +211,66 @@ class RestaurantRegistryBuilder:
                 or duplicate
                 or conflicting
             )
+            candidate_source = rst_records
+            if identity_status == MappingStatus.AMBIGUOUS:
+                exact = tuple(
+                    item
+                    for item in rst_records
+                    if (
+                        source.get("restaurant_id")
+                        and item.get("restaurant_id") == source.get("restaurant_id")
+                    )
+                    or (
+                        not source.get("restaurant_id")
+                        and item.get("normalized_name")
+                        == source.get("normalized_name")
+                    )
+                )
+                if exact:
+                    candidate_source = exact
+            case_ranker = CandidateRankingService(
+                maximum_candidates=(
+                    max(5, len(candidate_source))
+                    if identity_status == MappingStatus.AMBIGUOUS
+                    else 5
+                )
+            )
             candidates = (
-                ranker.rank(scope_rows[0], rst_records, order_counts)
+                case_ranker.rank(
+                    scope_rows[0], candidate_source, order_counts, order_names
+                )
                 if needs_review
                 else ()
             )
+            confidence = (
+                case_ranker.correction_confidence(candidates)
+                if needs_review
+                else CorrectionConfidence.NOT_REQUIRED
+            )
+            conflict_fields = conflicting_scope_fields(scope_rows)
+            conflict_reason, conflict_interpretation = classify_scope_conflict(
+                scope_rows, conflict_fields
+            )
+            scope_id_records = tuple(
+                item
+                for item in rst_records
+                if source.get("restaurant_id")
+                and item.get("restaurant_id") == source.get("restaurant_id")
+            )
+            scope_id_candidates = ranker.rank(
+                scope_rows[0], scope_id_records, order_counts, order_names
+            )
+            suggested_id = None
+            suggested_name = None
+            suggested_city = None
+            if result.readiness.identity_ready and mapped:
+                suggested_id = mapped.get("restaurant_id")
+                suggested_name = mapped.get("restaurant_name")
+                suggested_city = mapped.get("city")
+            elif confidence != CorrectionConfidence.NO_CANDIDATE and candidates:
+                suggested_id = candidates[0].restaurant_id
+                suggested_name = candidates[0].restaurant_name
+                suggested_city = candidates[0].city
             mapping_cases.append(
                 MappingReviewCase(
                     case_key=case_key,
@@ -215,12 +279,31 @@ class RestaurantRegistryBuilder:
                     identity_ready=result.readiness.identity_ready,
                     scope_rows=scope_rows,
                     candidates=candidates,
-                    conflict_fields=conflicting_scope_fields(scope_rows),
+                    conflict_fields=conflict_fields,
                     issue_codes=tuple(issue.code for issue in restaurant_issues),
                     suggestion_strength=(
-                        ranker.classify(candidates)
+                        case_ranker.classify(candidates)
                         if needs_review
                         else SuggestionStrength.NOT_REQUIRED
+                    ),
+                    correction_confidence=confidence,
+                    conflict_reason=conflict_reason,
+                    conflict_interpretation=conflict_interpretation,
+                    scope_id_rst_candidate=(
+                        scope_id_candidates[0] if scope_id_candidates else None
+                    ),
+                    copy_fix=CopyFixData(
+                        scope_row=scope_rows[0].source_row,
+                        current_restaurant_id=scope_rows[0].restaurant_id,
+                        suggested_restaurant_id=(
+                            str(suggested_id) if suggested_id else None
+                        ),
+                        suggested_restaurant_name=(
+                            str(suggested_name) if suggested_name else None
+                        ),
+                        suggested_city=(
+                            str(suggested_city) if suggested_city else None
+                        ),
                     ),
                 )
             )
@@ -261,6 +344,9 @@ class RestaurantRegistryBuilder:
                     "restaurant_name": name,
                     "normalized_name": normalize_restaurant_name(name),
                     "city": _text(_value(row, mapping, "city")),
+                    "area": _text(_value(row, mapping, "area")),
+                    "phone": _text(_value(row, mapping, "phone")),
+                    "email": _text(_value(row, mapping, "email")),
                     "commission_rate": commission,
                     "comment": _text(_value(row, mapping, "comment")),
                     "extra_fields": {
@@ -447,6 +533,7 @@ class RestaurantRegistryBuilder:
         method,
         issues,
         order_counts,
+        order_names,
     ):
         chosen = mapped or {}
         restaurant_id = chosen.get("restaurant_id") or source["restaurant_id"]
@@ -492,6 +579,7 @@ class RestaurantRegistryBuilder:
             data_quality_status=quality,
             admin_orders_available=count > 0,
             canonical_order_count=count,
+            admin_restaurant_name=order_names.get(str(restaurant_id)),
             issue_codes=issue_codes,
             readiness=RestaurantReadiness(
                 identity_ready=identity_ready,
@@ -514,6 +602,9 @@ class RestaurantRegistryBuilder:
             restaurant_name=source["restaurant_name"],
             restaurant_id=source["restaurant_id"],
             city=source["city"],
+            area=source["area"],
+            phone=source["phone"],
+            email=source["email"],
             commission_rate=source["commission_rate"],
             comment=source["comment"],
             extra_fields=source["extra_fields"],
