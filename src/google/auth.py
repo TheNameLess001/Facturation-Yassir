@@ -11,7 +11,7 @@ from src.config import Settings
 from src.google.exceptions import GoogleAuthenticationError, GoogleConfigurationError
 
 LOGGER = logging.getLogger(__name__)
-DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 REQUIRED_SERVICE_ACCOUNT_FIELDS = frozenset(
     {
         "type",
@@ -57,12 +57,12 @@ def build_google_credentials(settings: Settings) -> Any:
         ):
             credential_info = parse_service_account_json(settings)
             credentials = service_account.Credentials.from_service_account_info(
-                credential_info, scopes=[DRIVE_READONLY_SCOPE]
+                credential_info, scopes=[DRIVE_SCOPE]
             )
             LOGGER.info("google_authentication_configured")
             return credentials
         if settings.google_auth_mode == "ADC":
-            credentials, _ = google.auth.default(scopes=[DRIVE_READONLY_SCOPE])
+            credentials, _ = google.auth.default(scopes=[DRIVE_SCOPE])
             return credentials
         raise GoogleAuthenticationError("Google Drive is not configured")
     except (GoogleAuthenticationError, GoogleConfigurationError):

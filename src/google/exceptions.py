@@ -18,6 +18,10 @@ class DrivePermissionError(GoogleIntegrationError):
     pass
 
 
+class StorageArchitectureError(GoogleIntegrationError):
+    """Processed storage cannot satisfy the existing-file update contract."""
+
+
 class DriveFileNotFoundError(GoogleIntegrationError):
     pass
 

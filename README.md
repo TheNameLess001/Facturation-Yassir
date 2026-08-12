@@ -4,7 +4,7 @@ CashCo V2 is a controlled billing and settlement workspace for restaurant partne
 
 ## Architecture and source boundaries
 
-The application loads typed configuration centrally from environment variables. Google service-account JSON is parsed directly from `GOOGLE_SERVICE_ACCOUNT_JSON` in memory; it is never expected as a repository file.
+The application loads typed configuration centrally from environment variables. Google service-account JSON is parsed directly from `GOOGLE_SERVICE_ACCOUNT_JSON` in memory; it is never expected as a repository file. Phase 3 requests the Drive scope required to publish processed artifacts, while source services expose only read operations and write operations are restricted to the configured CashCo workspace.
 
 The confirmed Drive sources are:
 

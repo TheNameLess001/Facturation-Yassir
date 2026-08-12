@@ -24,6 +24,10 @@ from src.ingestion.registry import SourceManifestRegistry
 from src.models.enums import ConnectionState, HealthState, SourceType
 
 LOGGER = logging.getLogger(__name__)
+CSV_MIME_TYPES = frozenset({"text/csv", "application/csv"})
+XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+GOOGLE_SHEETS_MIME_TYPE = "application/vnd.google-apps.spreadsheet"
+SUPPORTED_ADMIN_MIME_TYPES = CSV_MIME_TYPES | {XLSX_MIME_TYPE, GOOGLE_SHEETS_MIME_TYPE}
 
 
 class Phase2SourceDiscoveryService:
@@ -120,6 +124,15 @@ class Phase2SourceDiscoveryService:
                     )
                 )
                 continue
+            if file.mime_type not in SUPPORTED_ADMIN_MIME_TYPES:
+                ignored.append(
+                    IgnoredAdminFile(
+                        file_id=file.file_id,
+                        filename=file.name,
+                        reason=IgnoredFileReason.UNSUPPORTED_CONTENT_TYPE,
+                    )
+                )
+                continue
             state = self.registry.register(
                 SourceType.ADMIN_EARNINGS, file, checked_at=checked_at
             )
@@ -144,12 +157,9 @@ class Phase2SourceDiscoveryService:
 
     @staticmethod
     def _ignored_reason(filename: str) -> IgnoredFileReason:
-        suffix = PurePath(filename).suffix.casefold()
-        if suffix not in {".csv", ".xlsx"}:
-            return IgnoredFileReason.UNSUPPORTED_EXTENSION
         stem = PurePath(filename).stem
         if stem.casefold().startswith("data week "):
-            return IgnoredFileReason.INVALID_WEEK
+            return IgnoredFileReason.MALFORMED_ADMIN_FILENAME
         return IgnoredFileReason.INVALID_FILENAME
 
     @staticmethod

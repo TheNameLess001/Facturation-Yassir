@@ -13,6 +13,8 @@ class IgnoredFileReason(StrEnum):
     INVALID_FILENAME = "INVALID_FILENAME"
     UNSUPPORTED_EXTENSION = "UNSUPPORTED_EXTENSION"
     INVALID_WEEK = "INVALID_WEEK"
+    MALFORMED_ADMIN_FILENAME = "MALFORMED_ADMIN_FILENAME"
+    UNSUPPORTED_CONTENT_TYPE = "UNSUPPORTED_CONTENT_TYPE"
 
 
 class ReadinessState(StrEnum):
@@ -30,7 +32,7 @@ class AdminEarningsSourceFile(BaseModel):
     filename: str
     week_number: int
     year: int
-    extension: str
+    extension: str | None
     mime_type: str
     modified_at: datetime
     size: int | None = None

@@ -9,6 +9,10 @@ from src.google.drive_service import GoogleDriveService
 from src.google.exceptions import GoogleIntegrationError
 from src.ingestion.phase2_models import Phase2DiscoveryResult
 from src.ingestion.phase2_runtime import discover_phase2_sources
+from src.ingestion.phase3_runtime import (
+    load_latest_ingestion_summary,
+    run_phase3_ingestion,
+)
 from src.models.enums import HealthState
 from src.ui.layout import page_setup, period_banner, status_badge
 
@@ -107,6 +111,42 @@ with st.expander(f"Ignored files ({len(result.ignored_admin_files)})"):
         )
     else:
         st.caption("No files were ignored.")
+
+st.markdown('<div class="cc-section">Admin Earnings ingestion</div>', unsafe_allow_html=True)
+summary = load_latest_ingestion_summary()
+if summary:
+    ingestion_cards = (
+        ("Sources processed", str(summary.sources_read)),
+        ("Raw rows", f"{summary.raw_rows:,}"),
+        ("Canonical orders", f"{summary.canonical_orders:,}"),
+        ("Duplicates removed", f"{summary.identical_duplicate_rows:,}"),
+        ("Conflicts", f"{summary.conflicting_order_ids:,}"),
+        ("Blocking issues", f"{summary.blocking_issues:,}"),
+    )
+    for column, (label, value) in zip(st.columns(6), ingestion_cards, strict=True):
+        column.metric(label, value)
+    st.caption(f"Last ingestion: {summary.completed_at:%d %b %Y · %H:%M UTC} · Run {summary.run_id}")
+else:
+    st.info("No published Phase 3 ingestion summary is available yet.")
+
+if st.button("Run Admin Earnings ingestion", disabled=result.health.admin_earnings != HealthState.HEALTHY):
+    with st.spinner("Reading and normalizing Admin Earnings sources…"):
+        ingestion = run_phase3_ingestion()
+    st.cache_data.clear()
+    st.success(
+        f"Ingestion complete: {ingestion.summary.canonical_orders:,} canonical orders; "
+        f"{ingestion.summary.conflicting_order_ids:,} conflicts isolated."
+    )
+    st.rerun()
+st.caption("This action reads Admin Earnings and publishes validated processed artifacts only. It does not run Finance, RST, settlement, document, or email logic.")
+
+if summary and summary.blocking_issues:
+    with st.expander("Ingestion issues"):
+        st.warning(
+            f"{summary.conflicting_order_ids:,} conflicting Order IDs require REVIEW_QUEUE; "
+            f"{summary.invalid_financial_values:,} invalid financial values remain null; "
+            f"{summary.missing_order_id_rows:,} rows have missing Order IDs."
+        )
 
 st.markdown('<div class="cc-section">Drive access matrix</div>', unsafe_allow_html=True)
 for item in result.access:

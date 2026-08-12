@@ -2,6 +2,7 @@ import streamlit as st
 
 from src.ingestion.phase2_models import Phase2DiscoveryResult
 from src.ingestion.phase2_runtime import discover_phase2_sources
+from src.ingestion.phase3_runtime import load_latest_ingestion_summary
 from src.models.enums import HealthState
 from src.ui.layout import page_setup, period_banner, render_kpis
 from src.ui.mock_data import EMAIL_FUNNEL, KPI_ITEMS, WORKFLOW, billing_rows
@@ -92,3 +93,18 @@ with health_columns[4]:
         '<div class="cc-kpi-note">UTC · cached for 60 seconds</div></div>',
         unsafe_allow_html=True,
     )
+
+ingestion_summary = load_latest_ingestion_summary()
+st.markdown('<div class="cc-section">Real ingestion health</div>', unsafe_allow_html=True)
+if ingestion_summary:
+    render_kpis(
+        [
+            ("Last ingestion", ingestion_summary.completed_at.strftime("%d %b · %H:%M"), "REAL · UTC"),
+            ("Sources processed", str(ingestion_summary.sources_read), "REAL Admin metadata/content"),
+            ("Canonical orders", f"{ingestion_summary.canonical_orders:,}", "REAL normalized orders"),
+            ("Duplicate conflicts", f"{ingestion_summary.conflicting_order_ids:,}", "BLOCKING · REVIEW_QUEUE"),
+            ("Blocking issues", f"{ingestion_summary.blocking_issues:,}", "REAL ingestion diagnostics"),
+        ]
+    )
+else:
+    st.info("No published Admin Earnings ingestion is available yet.")

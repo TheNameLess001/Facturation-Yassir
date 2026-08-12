@@ -18,6 +18,9 @@ google-credentials*.json
 google-service-account*.json
 credentials*.json
 data/processed/
+data/raw/
+*.parquet
+phase3_empty_artifacts/
 data/local/
 *.log
 .DS_Store

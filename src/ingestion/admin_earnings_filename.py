@@ -6,7 +6,7 @@ from pathlib import PurePath
 
 ADMIN_EARNINGS_FILENAME_PATTERN = re.compile(
     r"^data week (?P<week>[1-9]|[1-4][0-9]|5[0-3])_(?P<year>20\d{2})"
-    r"(?P<extension>\.csv|\.xlsx)$",
+    r"(?P<extension>\.csv|\.xlsx)?$",
     re.IGNORECASE,
 )
 
@@ -16,7 +16,7 @@ class AdminEarningsFilename:
     filename: str
     week: int
     year: int
-    extension: str
+    extension: str | None
 
 
 def parse_admin_earnings_filename(filename: str) -> AdminEarningsFilename | None:
@@ -29,5 +29,5 @@ def parse_admin_earnings_filename(filename: str) -> AdminEarningsFilename | None
         filename=basename,
         week=int(match.group("week")),
         year=int(match.group("year")),
-        extension=match.group("extension").lower(),
+        extension=(match.group("extension") or "").lower() or None,
     )

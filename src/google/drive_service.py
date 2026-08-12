@@ -6,7 +6,7 @@ from typing import Any
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 from src.google.exceptions import (
     DriveConnectionError,
@@ -164,6 +164,107 @@ class GoogleDriveService:
             raise self._translate_error(exc, file_id) from exc
         except Exception as exc:
             raise DriveConnectionError("Google Drive download failed") from exc
+
+    def export_file(self, file_id: str, mime_type: str) -> bytes:
+        """Export a Google-native file in memory without mutating the source."""
+        buffer = io.BytesIO()
+        try:
+            request = self._api.files().export_media(fileId=file_id, mimeType=mime_type)
+            downloader = MediaIoBaseDownload(buffer, request)
+            complete = False
+            while not complete:
+                _, complete = downloader.next_chunk()
+            return buffer.getvalue()
+        except HttpError as exc:
+            raise self._translate_error(exc, file_id) from exc
+        except Exception as exc:
+            raise DriveConnectionError("Google Drive export failed") from exc
+
+    def ensure_folder(self, parent_id: str, name: str) -> DriveFile:
+        for folder in self.list_child_folders(parent_id):
+            if folder.name == name:
+                return folder
+        try:
+            payload = (
+                self._api.files()
+                .create(
+                    body={"name": name, "mimeType": FOLDER_MIME_TYPE, "parents": [parent_id]},
+                    fields=FILE_FIELDS,
+                    supportsAllDrives=True,
+                )
+                .execute()
+            )
+            return DriveFile.from_api(payload)
+        except HttpError as exc:
+            raise self._translate_error(exc) from exc
+
+    def upload_bytes_atomic(
+        self, folder_id: str, name: str, content: bytes, mime_type: str
+    ) -> DriveFile:
+        """Stage bytes, then replace/create the named processed artifact."""
+        media = MediaIoBaseUpload(io.BytesIO(content), mimetype=mime_type, resumable=True)
+        temporary_name = f".{name}.uploading"
+        try:
+            temporary = (
+                self._api.files()
+                .create(
+                    body={"name": temporary_name, "parents": [folder_id]},
+                    media_body=media,
+                    fields=FILE_FIELDS,
+                    supportsAllDrives=True,
+                )
+                .execute()
+            )
+            existing = tuple(file for file in self.list_files(folder_id) if file.name == name)
+            if existing:
+                final = (
+                    self._api.files()
+                    .update(
+                        fileId=existing[0].file_id,
+                        media_body=MediaIoBaseUpload(io.BytesIO(content), mimetype=mime_type, resumable=True),
+                        fields=FILE_FIELDS,
+                        supportsAllDrives=True,
+                    )
+                    .execute()
+                )
+                self._api.files().delete(fileId=temporary["id"], supportsAllDrives=True).execute()
+            else:
+                final = (
+                    self._api.files()
+                    .update(
+                        fileId=temporary["id"],
+                        body={"name": name},
+                        fields=FILE_FIELDS,
+                        supportsAllDrives=True,
+                    )
+                    .execute()
+                )
+            return DriveFile.from_api(final)
+        except HttpError as exc:
+            raise self._translate_error(exc) from exc
+
+    def update_file_content(
+        self, file_id: str, content: bytes, mime_type: str
+    ) -> DriveFile:
+        """Update an existing file's content; this method never creates a Drive object."""
+        try:
+            payload = (
+                self._api.files()
+                .update(
+                    fileId=file_id,
+                    media_body=MediaIoBaseUpload(
+                        io.BytesIO(content), mimetype=mime_type, resumable=True
+                    ),
+                    fields=FILE_FIELDS,
+                    supportsAllDrives=True,
+                )
+                .execute()
+            )
+            return DriveFile.from_api(payload)
+        except HttpError as exc:
+            raise self._translate_error(exc, file_id) from exc
+        except Exception as exc:
+            raise DriveConnectionError("Google Drive update failed") from exc
 
     def test_connection(self, root_folder_id: str) -> DriveConnectionResult:
         folder = self.get_folder_metadata(root_folder_id)
