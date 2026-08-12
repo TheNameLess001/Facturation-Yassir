@@ -82,7 +82,7 @@ def test_invoice_scope_and_rst_schema_profiling() -> None:
 
 def test_exact_id_normalization_enrichment_chain_and_order_join() -> None:
     scope = pd.DataFrame(
-        [{"Column 1": "Scope label", "Restaurant ID": 123.0, "CITY": "Casa"}]
+        [{"Column 1": "O'Tacos Ziraoui", "Restaurant ID": 123.0, "CITY": "Casa"}]
     )
     result = build(scope, pd.DataFrame([complete_rst()]), order_counts={"123": 7})
     restaurant = result.restaurants[0]
@@ -153,8 +153,8 @@ def test_unmatched_scope_restaurant_is_blocking() -> None:
 def test_duplicate_and_conflicting_scope_rows() -> None:
     duplicate_scope = pd.DataFrame(
         [
-            {"Column 1": "Store", "Restaurant ID": "123", "CITY": "Rabat"},
-            {"Column 1": "Store", "Restaurant ID": "123", "CITY": "Rabat"},
+            {"Column 1": "O'Tacos Ziraoui", "Restaurant ID": "123", "CITY": "Rabat"},
+            {"Column 1": "O'Tacos Ziraoui", "Restaurant ID": "123", "CITY": "Rabat"},
         ]
     )
     duplicate = build(duplicate_scope, pd.DataFrame([complete_rst()]))
@@ -223,7 +223,7 @@ def test_standalone_and_missing_quality_fields() -> None:
 
 def test_invoice_scope_commission_is_retained_when_rst_commission_is_missing() -> None:
     scope = pd.DataFrame(
-        [{"Column 1": "Store", "Restaurant ID": "123", "Commission": "0.22"}]
+        [{"Column 1": "O'Tacos Ziraoui", "Restaurant ID": "123", "Commission": "0.22"}]
     )
     rst = pd.DataFrame([complete_rst(**{"Commission %": None})])
     result = build(scope, rst)
@@ -234,7 +234,7 @@ def test_invoice_scope_commission_is_retained_when_rst_commission_is_missing() -
 def test_scope_explicit_false_field_is_not_in_registry() -> None:
     scope = pd.DataFrame(
         [
-            {"Column 1": "Included", "Restaurant ID": "123", "Active": "yes"},
+            {"Column 1": "O'Tacos Ziraoui", "Restaurant ID": "123", "Active": "yes"},
             {"Column 1": "Excluded", "Restaurant ID": "456", "Active": "false"},
         ]
     )
@@ -244,7 +244,7 @@ def test_scope_explicit_false_field_is_not_in_registry() -> None:
 
 
 def test_finance_tracking_is_not_a_registry_input() -> None:
-    scope = pd.DataFrame([{"Column 1": "Store", "Restaurant ID": "123"}])
+    scope = pd.DataFrame([{"Column 1": "O'Tacos Ziraoui", "Restaurant ID": "123"}])
     result = build(scope, pd.DataFrame([complete_rst()]))
     dumped = result.model_dump()
     assert "finance_tracking" not in dumped

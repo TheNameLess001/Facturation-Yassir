@@ -130,6 +130,26 @@ def test_admin_orders_are_supporting_signal_not_mapping_decision() -> None:
     assert "ADMIN ORDERS 2,419" in candidate.similarity_indicators
 
 
+def test_materially_different_name_blocks_existing_restaurant_id() -> None:
+    result = build(
+        [{"Column 1": "Completely Different Brand", "Restaurant ID": "123"}],
+        [rst_row("123", "O'Tacos Ziraoui")],
+    )
+    restaurant = result.restaurants[0]
+    assert restaurant.mapping_status == MappingStatus.SCOPE_ID_NAME_MISMATCH
+    assert restaurant.readiness.identity_ready is False
+    assert "SCOPE_ID_NAME_MISMATCH" in restaurant.issue_codes
+
+
+def test_spelling_variation_does_not_block_exact_restaurant_id() -> None:
+    result = build(
+        [{"Column 1": "O Tacos - Ziraou", "Restaurant ID": "123"}],
+        [rst_row("123", "O'Tacos Ziraoui")],
+    )
+    assert result.restaurants[0].mapping_status == MappingStatus.MATCHED_BY_ID
+    assert result.restaurants[0].readiness.identity_ready is True
+
+
 def test_conflicting_scope_case_keeps_all_rows_and_fields() -> None:
     result = build(
         [

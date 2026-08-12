@@ -15,6 +15,7 @@ from src.ingestion.admin_earnings_normalizer import (
 from src.restaurants.mapping_review import (
     CandidateRankingService,
     conflicting_scope_fields,
+    materially_different_restaurant_names,
 )
 from src.restaurants.registry_models import (
     DataQualityStatus,
@@ -359,6 +360,15 @@ class RestaurantRegistryBuilder:
         if restaurant_id:
             matches = cls._unique_candidates(by_id.get(restaurant_id, ()))
             if len(matches) == 1:
+                if materially_different_restaurant_names(
+                    source.get("restaurant_name"),
+                    matches[0].get("restaurant_name"),
+                ):
+                    return (
+                        None,
+                        MappingStatus.SCOPE_ID_NAME_MISMATCH,
+                        "SCOPE_ID_NAME_MISMATCH",
+                    )
                 return matches[0], MappingStatus.MATCHED_BY_ID, "EXACT_RESTAURANT_ID"
             if len(matches) > 1:
                 return None, MappingStatus.AMBIGUOUS, "AMBIGUOUS_RESTAURANT_ID"
@@ -396,6 +406,15 @@ class RestaurantRegistryBuilder:
             issues.append(cls._issue("UNMATCHED_SCOPE_RESTAURANT", RegistryIssueSeverity.BLOCKING, "Invoice Scope restaurant was not found in RST.", source))
         elif status == MappingStatus.AMBIGUOUS:
             issues.append(cls._issue("AMBIGUOUS_RESTAURANT_MAPPING", RegistryIssueSeverity.BLOCKING, "Invoice Scope restaurant matches multiple RST candidates.", source))
+        elif status == MappingStatus.SCOPE_ID_NAME_MISMATCH:
+            issues.append(
+                cls._issue(
+                    "SCOPE_ID_NAME_MISMATCH",
+                    RegistryIssueSeverity.BLOCKING,
+                    "Restaurant ID exists in RST but belongs to a materially different restaurant name.",
+                    source,
+                )
+            )
         if mapped is None:
             return issues
         checks = (

@@ -169,6 +169,11 @@ render_kpis(
             f"{registry.scope_rows_without_restaurant_id:,}",
             "Can still exact-match uniquely by name",
         ),
+        (
+            "ID / Name Mismatch",
+            f"{registry.issue_count('SCOPE_ID_NAME_MISMATCH'):,}",
+            "Existing ID contradicts scope name",
+        ),
         ("Mapped", f"{registry.mapped_count:,}", "Exact deterministic identity"),
     ]
 )

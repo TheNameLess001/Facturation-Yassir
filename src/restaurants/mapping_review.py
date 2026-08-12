@@ -113,6 +113,20 @@ class CandidateRankingService:
         return SuggestionStrength.WEAK_SUGGESTION
 
 
+def materially_different_restaurant_names(
+    scope_name: object,
+    rst_name: object,
+) -> bool:
+    """Flag only an obvious ID/name contradiction, never a spelling variation."""
+    scope = _normalized(scope_name)
+    rst = _normalized(rst_name)
+    if not scope or not rst:
+        return False
+    similarity = SequenceMatcher(None, scope, rst).ratio()
+    shared_tokens = _tokens(scope) & _tokens(rst)
+    return similarity < 0.5 and not shared_tokens
+
+
 def conflicting_scope_fields(rows: tuple[ScopeSourceRow, ...]) -> tuple[str, ...]:
     if len(rows) < 2:
         return ()
