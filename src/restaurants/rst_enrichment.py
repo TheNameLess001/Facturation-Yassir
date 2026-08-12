@@ -1,3 +1,5 @@
+"""LEGACY Payment-Scope enrichment; active registry uses ``scope_registry``."""
+
 from __future__ import annotations
 
 import hashlib

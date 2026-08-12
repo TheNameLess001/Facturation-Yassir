@@ -54,8 +54,8 @@ class SourceHealth(BaseModel):
 
     google_connection: HealthState
     admin_earnings: HealthState
+    invoice_scope: HealthState
     rst_list: HealthState
-    finance_tracking: HealthState
     workspace: HealthState
     overall: ReadinessState
 
@@ -68,7 +68,7 @@ class Phase2DiscoveryResult(BaseModel):
     ignored_admin_files: tuple[IgnoredAdminFile, ...] = ()
     missing_admin_files: int = 0
     rst_list: DriveFile | None = None
-    finance_tracking: DriveFile | None = None
+    invoice_scope: DriveFile | None = None
     access: tuple[DriveAccessResult, ...] = ()
     health: SourceHealth
     last_checked_at: datetime

@@ -31,14 +31,18 @@ class Settings(BaseSettings):
     admin_earnings_max_file_mb: int = Field(default=100, gt=0, le=1000)
     admin_earnings_date_day_first: bool = False
     admin_earnings_csv_encoding: str = "utf-8-sig"
+    invoice_scope_file_id: str | None = None
+    invoice_scope_worksheet: str = "CASH-CO"
+    invoice_scope_column_map: dict[str, str] = Field(default_factory=dict)
+    invoice_scope_alias_map: dict[str, str] = Field(default_factory=dict)
+    # LEGACY / DEPRECATED / NOT USED by active CashCo V2 runtime. These fields
+    # remain temporarily so historical tests and local environments can load.
     payment_scope_folder_id: str | None = None
     payment_scope_column_map: dict[str, str] = Field(default_factory=dict)
     payment_scope_max_file_mb: int = Field(default=25, gt=0, le=250)
     payment_scope_csv_encoding: str = "utf-8-sig"
     rst_list_file_id: str | None = None
     rst_list_folder_id: str | None = None
-    finance_tracking_file_id: str | None = None
-    finance_tracking_folder_id: str | None = None
     rst_column_map: dict[str, str] = Field(default_factory=dict)
     rst_max_file_mb: int = Field(default=50, gt=0, le=500)
     rst_csv_encoding: str = "utf-8-sig"
@@ -82,9 +86,8 @@ class Settings(BaseSettings):
         """Report whether every confirmed Drive source/workspace ID is present."""
         required_ids = (
             self.admin_earnings_folder_id,
+            self.invoice_scope_file_id,
             self.rst_list_file_id,
-            self.finance_tracking_file_id,
-            self.finance_tracking_folder_id,
             self.config_folder_id,
             self.processed_folder_id,
             self.partners_folder_id,

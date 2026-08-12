@@ -20,7 +20,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.info(
-    "Data source readiness is monitored separately. Phase 2 cannot unlock automation or create communications."
+    "Data source readiness is monitored separately. Future authorization requires "
+    "valid Invoice Scope, Restaurant Registry, settlement period, and documents."
 )
 
 st.markdown(
@@ -28,7 +29,7 @@ st.markdown(
 )
 render_kpis(
     [
-        ("Eligible", "423", "Official payment scope"),
+        ("Eligible", "423", "Mock · official Invoice Scope"),
         ("Ready", "390", "Can enter preparation"),
         ("Blocked", "17", "Cannot be authorized"),
         ("Needs review", "16", "Finance action required"),

@@ -1,3 +1,5 @@
+"""LEGACY Payment-Scope restaurant models retained for compatibility."""
+
 from __future__ import annotations
 
 from datetime import datetime

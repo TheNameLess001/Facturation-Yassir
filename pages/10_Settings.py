@@ -66,7 +66,7 @@ result = load_sources()
 cards = (
     ("Google Connection", result.connection_state.value, result.health.google_connection),
     ("Admin Earnings", f"{len(result.valid_admin_files)} VALID FILES", result.health.admin_earnings),
-    ("Finance Tracking", "CONNECTED" if result.finance_tracking else "NOT READY", result.health.finance_tracking),
+    ("Invoice Scope", "CONNECTED" if result.invoice_scope else "NOT READY", result.health.invoice_scope),
     ("RST List", "CONNECTED" if result.rst_list else "NOT READY", result.health.rst_list),
     ("CashCo Workspace", "READY" if result.health.workspace == HealthState.HEALTHY else "CHECK ACCESS", result.health.workspace),
 )
@@ -146,7 +146,7 @@ if st.button("Run Admin Earnings ingestion", disabled=result.health.admin_earnin
         f"{ingestion.summary.conflicting_order_ids:,} conflicts isolated."
     )
     st.rerun()
-st.caption("This action reads Admin Earnings and publishes validated processed artifacts only. It does not run Finance, RST, settlement, document, or email logic.")
+st.caption("This action reads Admin Earnings and publishes validated processed artifacts only. It does not evaluate Invoice Scope, enrich from RST, or run settlement, document, or email logic.")
 
 if summary and summary.blocking_issues:
     with st.expander("Ingestion issues"):
@@ -273,5 +273,12 @@ with st.expander("Technical details"):
     for item in result.access:
         st.code(f"{item.location}: {item.object_id or 'NOT_CONFIGURED'}")
     st.caption(f"Last refresh: {result.last_checked_at:%d %b %Y · %H:%M:%S UTC}")
+
+with st.expander("Legacy sources"):
+    st.markdown(f"**Finance Tracking** &nbsp; {status_badge('DEPRECATED', 'neutral')}", unsafe_allow_html=True)
+    st.caption(
+        "Not used by CashCo V2. It is not checked during normal runtime and does "
+        "not affect source readiness, eligibility, billing, or authorization."
+    )
 
 st.warning("AUTOMATION OFF · WAITING FOR ADMIN AUTHORIZATION")

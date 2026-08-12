@@ -60,6 +60,9 @@ class AuditLevel(StrEnum):
 
 class SourceType(StrEnum):
     ADMIN_EARNINGS = "ADMIN_EARNINGS"
+    INVOICE_SCOPE = "INVOICE_SCOPE"
+    # Legacy source types retained only for historical manifest compatibility.
+    # They are deprecated and are not used by CashCo V2 readiness or billing scope.
     PAYMENT_SCOPE = "PAYMENT_SCOPE"
     FINANCE_TRACKING = "FINANCE_TRACKING"
     RST_LIST = "RST_LIST"

@@ -16,8 +16,7 @@ def test_confirmed_drive_settings_are_centrally_loaded(monkeypatch) -> None:
     values = {
         "CASHCO_ADMIN_EARNINGS_FOLDER_ID": "admin",
         "CASHCO_RST_LIST_FILE_ID": "rst",
-        "CASHCO_FINANCE_TRACKING_FILE_ID": "finance-file",
-        "CASHCO_FINANCE_TRACKING_FOLDER_ID": "finance-folder",
+        "CASHCO_INVOICE_SCOPE_FILE_ID": "invoice-scope-file",
         "CASHCO_CONFIG_FOLDER_ID": "config",
         "CASHCO_PROCESSED_FOLDER_ID": "processed",
         "CASHCO_PARTNERS_FOLDER_ID": "partners",
@@ -27,7 +26,14 @@ def test_confirmed_drive_settings_are_centrally_loaded(monkeypatch) -> None:
     for name, value in values.items():
         monkeypatch.setenv(name, value)
     settings = Settings(_env_file=None)
-    assert settings.finance_tracking_file_id == "finance-file"
-    assert settings.finance_tracking_folder_id == "finance-folder"
+    assert settings.invoice_scope_file_id == "invoice-scope-file"
     assert settings.config_folder_id == "config"
     assert settings.drive_sources_configured is True
+
+
+def test_legacy_finance_environment_is_ignored(monkeypatch) -> None:
+    monkeypatch.setenv("CASHCO_FINANCE_TRACKING_FILE_ID", "legacy-file")
+    monkeypatch.setenv("CASHCO_FINANCE_TRACKING_FOLDER_ID", "legacy-folder")
+    settings = Settings(_env_file=None)
+    assert not hasattr(settings, "finance_tracking_file_id")
+    assert not hasattr(settings, "finance_tracking_folder_id")

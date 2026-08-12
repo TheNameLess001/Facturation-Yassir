@@ -38,7 +38,12 @@ class Phase2Drive:
         )
         self.metadata = {
             "rst": drive_file("rst", "RST List.xlsx"),
-            "finance": drive_file("finance", "Annual Finance.xlsx"),
+            "invoice": DriveFile(
+                file_id="invoice",
+                name="Invoice Scope",
+                mime_type="application/vnd.google-apps.spreadsheet",
+                modified_time=datetime(2026, 8, 12, tzinfo=UTC),
+            ),
         }
 
     def list_files(self, folder_id):
@@ -69,8 +74,7 @@ def configured_settings(tmp_path) -> Settings:
         _env_file=None,
         admin_earnings_folder_id="admin",
         rst_list_file_id="rst",
-        finance_tracking_file_id="finance",
-        finance_tracking_folder_id="finance-folder",
+        invoice_scope_file_id="invoice",
         config_folder_id="config",
         processed_folder_id="processed",
         partners_folder_id="partners",
@@ -101,15 +105,46 @@ def test_filename_rejects_invalid_week(name) -> None:
     assert parse_admin_earnings_filename(name) is None
 
 
-def test_phase2_discovers_admin_rst_finance_and_workspace(tmp_path) -> None:
+def test_phase2_discovers_admin_invoice_scope_rst_and_workspace(tmp_path) -> None:
     result = discover(tmp_path)
     assert len(result.valid_admin_files) == 5
     assert result.ignored_admin_files[0].reason == IgnoredFileReason.INVALID_FILENAME
     assert result.rst_list is not None
-    assert result.finance_tracking is not None
+    assert result.invoice_scope is not None
     assert result.health.workspace == HealthState.HEALTHY
     assert result.health.overall == ReadinessState.READY_FOR_INGESTION
     assert AutomationMode.OFF.value == "OFF"
+
+
+def test_finance_tracking_is_not_required_or_checked(tmp_path) -> None:
+    drive = Phase2Drive()
+    result = discover(tmp_path, drive)
+    assert result.health.overall == ReadinessState.READY_FOR_INGESTION
+    assert all("Finance" not in item.location for item in result.access)
+
+
+def test_invoice_scope_health_is_blocking_when_not_readable(tmp_path) -> None:
+    class MissingInvoiceScope(Phase2Drive):
+        def check_access(self, object_id, *, location, folder, require_write):
+            result = super().check_access(
+                object_id,
+                location=location,
+                folder=folder,
+                require_write=require_write,
+            )
+            if location == "Invoice Scope":
+                return result.model_copy(
+                    update={
+                        "access": AccessLevel.INACCESSIBLE,
+                        "readable": False,
+                        "object": None,
+                    }
+                )
+            return result
+
+    result = discover(tmp_path, MissingInvoiceScope())
+    assert result.health.invoice_scope == HealthState.BLOCKING
+    assert result.health.overall == ReadinessState.BLOCKING
 
 
 def test_manifest_states_new_unchanged_and_modified(tmp_path) -> None:

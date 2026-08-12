@@ -138,5 +138,5 @@ else:
 
 st.markdown('<div class="cc-section">Downstream controls</div>', unsafe_allow_html=True)
 st.error(
-    "Payment Scope filtering, RST enrichment, settlement calculations, documents, and communication remain unavailable in Phase 3. Automation is OFF."
+    "Invoice Scope registry diagnostics are separate. Settlement calculations, documents, and communication remain unavailable. Automation is OFF."
 )

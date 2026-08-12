@@ -1,6 +1,6 @@
 # CashCo V2 — Partner Billing Control Tower
 
-CashCo V2 is a controlled billing and settlement workspace for restaurant partners. Phase 2 connects to Google Drive for metadata-only source discovery and access health. Automation remains `OFF`, awaiting Admin authorization, and no row ingestion, Drive write workflow, document, or email workflow is enabled.
+CashCo V2 is a controlled billing and settlement workspace for restaurant partners. Its current source layer connects to Google Drive, ingests Admin Earnings, and builds an in-memory Restaurant Registry from the official Invoice Scope and RST List. Automation remains `OFF`, awaiting Admin authorization; settlement, document, email, and payment workflows are not enabled.
 
 ## Architecture and source boundaries
 
@@ -8,12 +8,21 @@ The application loads typed configuration centrally from environment variables. 
 
 The confirmed Drive sources are:
 
-- **Admin Earnings:** read-only operational order/earnings source. It does not define a settlement period by filename.
-- **Finance Tracking:** read-only annual partner/payment tracking source. Its future period/payment information will determine the Finance population.
-- **RST List:** read-only restaurant enrichment source. It does not define settlement eligibility.
+- **Admin Earnings:** read-only transactional truth for orders. It does not define billing eligibility or a settlement period by filename.
+- **Invoice Scope:** read-only official list of restaurants CashCo must invoice. Presence in the active scope is the only current billing-eligibility source.
+- **RST List:** read-only restaurant identity and enrichment source. It does not define billing eligibility.
 - **CashCo workspace:** Config, Processed, Partners, Documents, and Audit will require read/write access in later phases.
 
-The earlier `PAYMENT_SCOPE` concept—especially the assumption of one file per P1/P2 period—is deprecated. New configuration and documentation use `FINANCE_TRACKING` or `FINANCE_SCOPE`. Existing legacy modules are not migrated here because this change intentionally does not implement Phase 2 business logic.
+The annual Finance Tracking source, `FINANCE_TRACKING`, `FINANCE_SCOPE`, and the period-file `PAYMENT_SCOPE` model are deprecated and not used by CashCo V2. Legacy modules and enum values may remain solely for historical test/manifest compatibility; normal source discovery, readiness, billing eligibility, dashboard status, and authorization do not call or depend on them.
+
+The active source chain is:
+
+```text
+Invoice Scope → RST Registry → Admin Earnings Orders → Settlement
+→ Documents → Admin Authorization → Email
+```
+
+Only the first three source/registry stages exist today. The downstream stages are future boundaries.
 
 ## Secure Google setup
 
@@ -24,7 +33,7 @@ The earlier `PAYMENT_SCOPE` concept—especially the assumption of one file per 
 5. Share the Drive objects with the service account using these permissions:
 
    - Admin Earnings: Viewer
-   - Finance Tracking: Viewer
+   - Invoice Scope: Viewer
    - RST List: Viewer
    - Config: Editor
    - Processed: Editor
@@ -43,9 +52,8 @@ Copy `.env.example` to `.env` for non-secret local settings. Supply the real val
 ```text
 GOOGLE_SERVICE_ACCOUNT_JSON=
 CASHCO_ADMIN_EARNINGS_FOLDER_ID=
+CASHCO_INVOICE_SCOPE_FILE_ID=
 CASHCO_RST_LIST_FILE_ID=
-CASHCO_FINANCE_TRACKING_FILE_ID=
-CASHCO_FINANCE_TRACKING_FOLDER_ID=
 CASHCO_CONFIG_FOLDER_ID=
 CASHCO_PROCESSED_FOLDER_ID=
 CASHCO_PARTNERS_FOLDER_ID=
@@ -90,9 +98,25 @@ python -m compileall -q app.py pages src tests
 git diff --check
 ```
 
-## Phase 2 boundary
+## Invoice Scope and Restaurant Registry
 
-The Data Sources page validates the real service-account connection, checks each configured Drive location independently, inventories strictly named Admin Earnings CSV/XLSX files, and maintains a metadata-only manifest. It does not parse source rows, normalize or deduplicate orders, parse Finance/RST content, calculate settlements, generate Google Sheets or documents, send email, or enable automation.
+The configured Invoice Scope workbook is profiled before use. The active worksheet is explicit (`CASHCO_INVOICE_SCOPE_WORKSHEET`, currently `CASH-CO`); historical worksheets are reported but never concatenated into the registry. Presence in the active list means `IN_SCOPE` unless a real, explicit eligibility column exists.
+
+Restaurant mapping is deterministic, in this order:
+
+1. exact normalized Restaurant ID;
+2. explicit controlled mapping;
+3. exact unique normalized restaurant name;
+4. controlled alias mapping;
+5. manual review.
+
+CashCo never fabricates Restaurant IDs, uses RIB as identity, or silently fuzzy-matches names. Chain membership is organizational only; each store retains its own Restaurant ID and orders. Unmatched and ambiguous scope restaurants remain blocking for future billing. Missing email, RIB, legal data, or commission is retained as a visible readiness issue without blocking registry ingestion.
+
+The registry remains in application memory under the current My Drive existing-file constraint. It does not call `files.create` and does not publish a new Drive artifact.
+
+## Source discovery boundary
+
+The Data Sources page validates the real service-account connection, checks each active configured Drive location independently, inventories Admin Earnings sources, and maintains a metadata manifest. Overall readiness depends on Google authentication, Admin Earnings, Invoice Scope, RST List, and the required CashCo workspace folders. Finance Tracking has no effect. No settlement, Google restaurant Sheet, document, email, or payment workflow is enabled.
 
 ## Phase 3.1 conflict diagnostics
 

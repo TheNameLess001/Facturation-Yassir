@@ -1,3 +1,5 @@
+"""LEGACY / DEPRECATED / NOT USED by the active CashCo V2 runtime."""
+
 from __future__ import annotations
 
 from src.config import Settings, get_settings

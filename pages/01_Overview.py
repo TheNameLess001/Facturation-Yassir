@@ -70,14 +70,14 @@ st.markdown(
 
 st.markdown('<div class="cc-section">Data source health</div>', unsafe_allow_html=True)
 source_result = load_compact_source_health()
-health_columns = st.columns(5)
+health_columns = st.columns(4)
 source_cards = (
-    ("Drive", source_result.connection_state.value, source_result.health.google_connection),
     ("Admin Earnings", f"{len(source_result.valid_admin_files)} files", source_result.health.admin_earnings),
-    ("Finance", "Ready" if source_result.finance_tracking else "Not ready", source_result.health.finance_tracking),
+    ("Invoice Scope", "Ready" if source_result.invoice_scope else "Error", source_result.health.invoice_scope),
     ("RST", "Ready" if source_result.rst_list else "Not ready", source_result.health.rst_list),
+    ("Automation", "OFF", HealthState.WARNING),
 )
-for column, (label, value, health) in zip(health_columns[:4], source_cards, strict=True):
+for column, (label, value, health) in zip(health_columns, source_cards, strict=True):
     badge_tone = "success" if health == HealthState.HEALTHY else "danger" if health == HealthState.BLOCKING else "warning"
     with column:
         st.markdown(
@@ -86,13 +86,10 @@ for column, (label, value, health) in zip(health_columns[:4], source_cards, stri
             f'<div class="cc-kpi-note">REAL metadata · {health.value}</div></div>',
             unsafe_allow_html=True,
         )
-with health_columns[4]:
-    st.markdown(
-        f'<div class="cc-card"><div class="cc-kpi-label">Last Drive check</div>'
-        f'<div class="cc-kpi-value" style="font-size:1.1rem">{source_result.last_checked_at:%H:%M}</div>'
-        '<div class="cc-kpi-note">UTC · cached for 60 seconds</div></div>',
-        unsafe_allow_html=True,
-    )
+st.caption(
+    f"Google Drive: {source_result.connection_state.value} · Last metadata check: "
+    f"{source_result.last_checked_at:%H:%M} UTC · Automation remains OFF."
+)
 
 ingestion_summary = load_latest_ingestion_summary()
 st.markdown('<div class="cc-section">Real ingestion health</div>', unsafe_allow_html=True)

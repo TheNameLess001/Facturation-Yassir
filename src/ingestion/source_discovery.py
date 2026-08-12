@@ -1,3 +1,8 @@
+"""LEGACY source discovery retained for historical compatibility only.
+
+Active CashCo V2 source discovery is ``phase2_discovery`` and uses Invoice Scope.
+"""
+
 from __future__ import annotations
 
 import logging

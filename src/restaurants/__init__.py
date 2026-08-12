@@ -10,3 +10,20 @@ __all__ = [
     "RestaurantLedgerProvisioner",
     "RestaurantRegistryService",
 ]
+from .registry_models import (
+    DataQualityStatus,
+    InvoiceScopeSchemaProfile,
+    MappingStatus,
+    RegisteredRestaurant,
+    RegistryIssue,
+    RestaurantRegistryResult,
+)
+
+__all__ = [
+    "DataQualityStatus",
+    "InvoiceScopeSchemaProfile",
+    "MappingStatus",
+    "RegisteredRestaurant",
+    "RegistryIssue",
+    "RestaurantRegistryResult",
+]

@@ -33,8 +33,8 @@ def _unavailable_result(
         health=SourceHealth(
             google_connection=health_state,
             admin_earnings=health_state,
+            invoice_scope=health_state,
             rst_list=health_state,
-            finance_tracking=health_state,
             workspace=health_state,
             overall=readiness,
         ),

@@ -18,7 +18,7 @@ def page_header() -> None:
         f"""<div class="cc-header"><div><div class="cc-brand">CashCo</div>
         <div class="cc-subtitle">Partner Billing Control Tower</div></div>
         <div class="cc-meta"><span class="cc-chip">2026-08-P1</span>
-        <span class="cc-chip">Data synced · Mock</span><span class="cc-chip">{user.name} · {user.role}</span>
+        <span class="cc-chip">Source layer · Real</span><span class="cc-chip">{user.name} · {user.role}</span>
         <span class="cc-chip off">Automation OFF</span></div></div>""",
         unsafe_allow_html=True,
     )
