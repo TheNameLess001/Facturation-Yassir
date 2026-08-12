@@ -12,15 +12,23 @@ from src.ingestion.admin_earnings_normalizer import (
     normalize_decimal,
     normalize_identifier,
 )
+from src.restaurants.mapping_review import (
+    CandidateRankingService,
+    conflicting_scope_fields,
+)
 from src.restaurants.registry_models import (
     DataQualityStatus,
     InvoiceScopeSchemaProfile,
+    MappingReviewCase,
     MappingStatus,
     RegisteredRestaurant,
     RegistryIssue,
     RegistryIssueSeverity,
+    RestaurantReadiness,
     RestaurantRegistryResult,
     RSTSchemaProfile,
+    ScopeSourceRow,
+    SuggestionStrength,
 )
 
 INVOICE_SCOPE_ALIASES: dict[str, tuple[str, ...]] = {
@@ -29,6 +37,7 @@ INVOICE_SCOPE_ALIASES: dict[str, tuple[str, ...]] = {
     "restaurant_name": ("column 1", "restaurant name", "restaurant", "store name"),
     "city": ("city", "ville"),
     "commission_rate": ("commission", "comission", "commission %"),
+    "comment": ("comment", "comments", "commentaire"),
     "in_scope": ("to invoice", "billing enabled", "invoice enabled", "active"),
 }
 
@@ -50,6 +59,9 @@ RST_ALIASES: dict[str, tuple[str, ...]] = {
     "area": ("sub city", "area", "zone"),
     "account_manager": ("account manager", "am"),
     "commission_rate": ("commission %", "commission", "comission"),
+    "store_type": ("store type",),
+    "restaurant_status": ("restaurant status",),
+    "status": ("status",),
 }
 
 FALSE_SCOPE_VALUES = frozenset(
@@ -132,9 +144,12 @@ class RestaurantRegistryBuilder:
         groups = self._scope_groups(active_scope_records)
         issues: list[RegistryIssue] = []
         restaurants: list[RegisteredRestaurant] = []
+        mapping_cases: list[MappingReviewCase] = []
         order_counts = canonical_order_counts or {}
-        for records in groups.values():
+        ranker = CandidateRankingService()
+        for case_key, records in groups.items():
             source = records[0]
+            scope_rows = tuple(self._scope_row_model(record) for record in records)
             restaurant_issues: list[RegistryIssue] = []
             duplicate = len(records) > 1 and self._scope_rows_identical(records)
             conflicting = len(records) > 1 and not duplicate
@@ -175,11 +190,39 @@ class RestaurantRegistryBuilder:
                 source,
                 mapped,
                 status,
+                identity_status,
                 method,
                 restaurant_issues,
                 order_counts,
             )
             restaurants.append(result)
+            needs_review = (
+                not result.readiness.identity_ready
+                or duplicate
+                or conflicting
+            )
+            candidates = (
+                ranker.rank(scope_rows[0], rst_records, order_counts)
+                if needs_review
+                else ()
+            )
+            mapping_cases.append(
+                MappingReviewCase(
+                    case_key=case_key,
+                    mapping_status=status,
+                    mapping_method=method,
+                    identity_ready=result.readiness.identity_ready,
+                    scope_rows=scope_rows,
+                    candidates=candidates,
+                    conflict_fields=conflicting_scope_fields(scope_rows),
+                    issue_codes=tuple(issue.code for issue in restaurant_issues),
+                    suggestion_strength=(
+                        ranker.classify(candidates)
+                        if needs_review
+                        else SuggestionStrength.NOT_REQUIRED
+                    ),
+                )
+            )
         with_id = sum(item["restaurant_id"] is not None for item in active_scope_records)
         return RestaurantRegistryResult(
             generated_at=datetime.now(UTC),
@@ -190,6 +233,7 @@ class RestaurantRegistryBuilder:
             scope_rows_without_restaurant_id=len(active_scope_records) - with_id,
             restaurants=tuple(restaurants),
             issues=tuple(issues),
+            mapping_cases=tuple(mapping_cases),
         )
 
     @staticmethod
@@ -217,6 +261,13 @@ class RestaurantRegistryBuilder:
                     "normalized_name": normalize_restaurant_name(name),
                     "city": _text(_value(row, mapping, "city")),
                     "commission_rate": commission,
+                    "comment": _text(_value(row, mapping, "comment")),
+                    "extra_fields": {
+                        str(column): _text(value)
+                        for column, value in row.items()
+                        if str(column) not in set(mapping.values())
+                        and _text(value) is not None
+                    },
                     "in_scope": in_scope,
                 }
             )
@@ -238,8 +289,14 @@ class RestaurantRegistryBuilder:
 
     @staticmethod
     def _scope_rows_identical(records: list[dict[str, object]]) -> bool:
-        material = ("restaurant_id", "normalized_name", "city", "commission_rate", "in_scope")
-        signatures = {tuple(record[field] for field in material) for record in records}
+        signatures = {
+            tuple(
+                (key, repr(value))
+                for key, value in sorted(record.items())
+                if key != "source_row"
+            )
+            for record in records
+        }
         return len(signatures) == 1
 
     @staticmethod
@@ -278,6 +335,9 @@ class RestaurantRegistryBuilder:
                     "area": _text(_value(row, mapping, "area")),
                     "account_manager": _text(_value(row, mapping, "account_manager")),
                     "commission_rate": commission,
+                    "store_type": _text(_value(row, mapping, "store_type")),
+                    "status": _text(_value(row, mapping, "restaurant_status"))
+                    or _text(_value(row, mapping, "status")),
                 }
             )
         return tuple(records)
@@ -360,12 +420,29 @@ class RestaurantRegistryBuilder:
         return issues
 
     @staticmethod
-    def _registered(source, mapped, status, method, issues, order_counts):
+    def _registered(
+        source,
+        mapped,
+        status,
+        identity_status,
+        method,
+        issues,
+        order_counts,
+    ):
         chosen = mapped or {}
         restaurant_id = chosen.get("restaurant_id") or source["restaurant_id"]
         issue_codes = tuple(issue.code for issue in issues)
         quality = DataQualityStatus.BLOCKING if any(issue.severity == RegistryIssueSeverity.BLOCKING for issue in issues) else DataQualityStatus.WARNING if issues else DataQualityStatus.HEALTHY
         count = order_counts.get(str(restaurant_id), 0) if restaurant_id else 0
+        identity_ready = bool(
+            mapped is not None
+            and identity_status
+            in {
+                MappingStatus.MATCHED_BY_ID,
+                MappingStatus.MATCHED_BY_EXACT_NAME,
+                MappingStatus.MATCHED_BY_ALIAS,
+            }
+        )
         return RegisteredRestaurant(
             restaurant_id=restaurant_id,
             restaurant_name=chosen.get("restaurant_name") or source["restaurant_name"],
@@ -397,6 +474,30 @@ class RestaurantRegistryBuilder:
             admin_orders_available=count > 0,
             canonical_order_count=count,
             issue_codes=issue_codes,
+            readiness=RestaurantReadiness(
+                identity_ready=identity_ready,
+                orders_available=count > 0,
+                settlement_ready=None,
+                document_ready=bool(
+                    chosen.get("legal_entity")
+                    and chosen.get("ice")
+                    and chosen.get("address")
+                ),
+                email_ready=bool(chosen.get("email") or chosen.get("finance_email")),
+                payment_ready=bool(chosen.get("rib")),
+            ),
+        )
+
+    @staticmethod
+    def _scope_row_model(source) -> ScopeSourceRow:
+        return ScopeSourceRow(
+            source_row=int(source["source_row"]),
+            restaurant_name=source["restaurant_name"],
+            restaurant_id=source["restaurant_id"],
+            city=source["city"],
+            commission_rate=source["commission_rate"],
+            comment=source["comment"],
+            extra_fields=source["extra_fields"],
         )
 
     @staticmethod

@@ -43,7 +43,6 @@ def run_restaurant_registry(
         rst_profile=rst.profile,
         invoice_scope_column_map=settings.invoice_scope_column_map,
         rst_column_map=settings.rst_column_map,
-        alias_map=settings.invoice_scope_alias_map,
         canonical_order_counts=order_counts,
     )
     LOGGER.info(

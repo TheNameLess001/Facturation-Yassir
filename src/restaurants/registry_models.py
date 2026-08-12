@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MappingStatus(StrEnum):
@@ -27,6 +27,14 @@ class RegistryIssueSeverity(StrEnum):
     INFO = "INFO"
     WARNING = "WARNING"
     BLOCKING = "BLOCKING"
+
+
+class SuggestionStrength(StrEnum):
+    STRONG_SINGLE_CANDIDATE = "STRONG_SINGLE_CANDIDATE"
+    MULTIPLE_PLAUSIBLE_CANDIDATES = "MULTIPLE_PLAUSIBLE_CANDIDATES"
+    WEAK_SUGGESTION = "WEAK_SUGGESTION"
+    NO_USEFUL_CANDIDATE = "NO_USEFUL_CANDIDATE"
+    NOT_REQUIRED = "NOT_REQUIRED"
 
 
 class WorksheetSchemaProfile(BaseModel):
@@ -85,6 +93,68 @@ class RegistryIssue(BaseModel):
     restaurant_name: str | None = None
 
 
+class ScopeSourceRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source_row: int
+    restaurant_name: str | None = None
+    restaurant_id: str | None = None
+    city: str | None = None
+    commission_rate: Decimal | None = None
+    comment: str | None = None
+    extra_fields: dict[str, str | None] = Field(default_factory=dict)
+
+
+class RestaurantCandidate(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    restaurant_id: str
+    restaurant_name: str | None = None
+    city: str | None = None
+    area: str | None = None
+    chain: str | None = None
+    store_type: str | None = None
+    status: str | None = None
+    commission_rate: Decimal | None = None
+    email: str | None = None
+    canonical_order_count: int = 0
+    name_similarity: float
+    same_city: bool = False
+    chain_signal: bool = False
+    token_overlap: float = 0.0
+    advisory_score: float
+    similarity_indicators: tuple[str, ...] = ()
+
+
+class MappingReviewCase(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    case_key: str
+    mapping_status: MappingStatus
+    mapping_method: str
+    identity_ready: bool
+    scope_rows: tuple[ScopeSourceRow, ...]
+    candidates: tuple[RestaurantCandidate, ...] = ()
+    conflict_fields: tuple[str, ...] = ()
+    issue_codes: tuple[str, ...] = ()
+    suggestion_strength: SuggestionStrength = SuggestionStrength.NOT_REQUIRED
+
+    @property
+    def likely_candidate(self) -> RestaurantCandidate | None:
+        return self.candidates[0] if self.candidates else None
+
+
+class RestaurantReadiness(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    identity_ready: bool
+    orders_available: bool
+    settlement_ready: bool | None = None
+    document_ready: bool
+    email_ready: bool
+    payment_ready: bool
+
+
 class RegisteredRestaurant(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -114,6 +184,7 @@ class RegisteredRestaurant(BaseModel):
     admin_orders_available: bool = False
     canonical_order_count: int = 0
     issue_codes: tuple[str, ...] = ()
+    readiness: RestaurantReadiness
 
 
 class RestaurantRegistryResult(BaseModel):
@@ -127,9 +198,26 @@ class RestaurantRegistryResult(BaseModel):
     scope_rows_without_restaurant_id: int
     restaurants: tuple[RegisteredRestaurant, ...]
     issues: tuple[RegistryIssue, ...]
+    mapping_cases: tuple[MappingReviewCase, ...] = ()
 
     def mapping_count(self, status: MappingStatus) -> int:
         return sum(item.mapping_status == status for item in self.restaurants)
 
     def issue_count(self, code: str) -> int:
         return sum(item.code == code for item in self.issues)
+
+    @property
+    def mapped_count(self) -> int:
+        return sum(item.readiness.identity_ready for item in self.restaurants)
+
+    @property
+    def mapping_completion(self) -> float:
+        return self.mapped_count / len(self.restaurants) if self.restaurants else 0.0
+
+    @property
+    def blocking_mapping_issues(self) -> int:
+        return sum(not item.readiness.identity_ready for item in self.restaurants)
+
+    @property
+    def ready_for_settlement_mapping(self) -> bool:
+        return self.blocking_mapping_issues == 0

@@ -105,12 +105,12 @@ The configured Invoice Scope workbook is profiled before use. The active workshe
 Restaurant mapping is deterministic, in this order:
 
 1. exact normalized Restaurant ID;
-2. explicit controlled mapping;
-3. exact unique normalized restaurant name;
-4. controlled alias mapping;
-5. manual review.
+2. exact unique normalized restaurant name;
+3. manual review and correction in Invoice Scope.
 
-CashCo never fabricates Restaurant IDs, uses RIB as identity, or silently fuzzy-matches names. Chain membership is organizational only; each store retains its own Restaurant ID and orders. Unmatched and ambiguous scope restaurants remain blocking for future billing. Missing email, RIB, legal data, or commission is retained as a visible readiness issue without blocking registry ingestion.
+Candidate ranking in Review Queue is advisory only. It may use name similarity, city, chain/brand tokens, and canonical Admin order availability to help a human locate the right RST record, but it never changes the mapping result. CashCo never fabricates Restaurant IDs, uses RIB as identity, silently fuzzy-matches names, or persists a second alias master. The authoritative correction is made manually in Invoice Scope, followed by **Refresh Google Sources**.
+
+Chain membership is organizational only; each store retains its own Restaurant ID and orders. Unmatched, ambiguous, and conflicting scope restaurants remain blocking for future identity readiness. Missing email, RIB, legal data, or commission is retained as a separate email/document/payment readiness issue and does not invalidate an otherwise exact identity mapping. Settlement readiness remains `NOT_EVALUATED` until the Settlement Engine exists.
 
 The registry remains in application memory under the current My Drive existing-file constraint. It does not call `files.create` and does not publish a new Drive artifact.
 

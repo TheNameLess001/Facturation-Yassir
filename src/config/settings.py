@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     invoice_scope_file_id: str | None = None
     invoice_scope_worksheet: str = "CASH-CO"
     invoice_scope_column_map: dict[str, str] = Field(default_factory=dict)
+    # LEGACY / DEPRECATED / NOT USED. Permanent corrections belong in Invoice Scope.
     invoice_scope_alias_map: dict[str, str] = Field(default_factory=dict)
     # LEGACY / DEPRECATED / NOT USED by active CashCo V2 runtime. These fields
     # remain temporarily so historical tests and local environments can load.

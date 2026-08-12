@@ -47,7 +47,12 @@ def restaurant_dialog(restaurant: RegisteredRestaurant) -> None:
                 "City": restaurant.city,
                 "Area": restaurant.area,
                 "Account Manager": restaurant.account_manager,
-                "Readiness": restaurant.data_quality_status.value,
+                "Identity": "READY" if restaurant.readiness.identity_ready else "BLOCKING",
+                "Orders": "AVAILABLE" if restaurant.readiness.orders_available else "NONE AVAILABLE",
+                "Settlement": "NOT EVALUATED",
+                "Documents": "READY" if restaurant.readiness.document_ready else "MISSING LEGAL",
+                "Email": "READY" if restaurant.readiness.email_ready else "MISSING",
+                "Payment": "READY" if restaurant.readiness.payment_ready else "MISSING RIB",
             }
         )
     with identity:
@@ -105,8 +110,15 @@ def restaurant_dialog(restaurant: RegisteredRestaurant) -> None:
 
 
 page_setup("Restaurant Registry")
-st.title("Restaurant Registry")
-st.caption("Invoice Scope eligibility · RST identity & enrichment · Real production data")
+header, action = st.columns([4, 1])
+with header:
+    st.title("Restaurant Registry")
+    st.caption("Invoice Scope eligibility · RST identity & enrichment · Real production data")
+with action:
+    if st.button("Refresh Google Sources", type="primary"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.rerun()
 
 try:
     registry = load_registry()
@@ -212,12 +224,12 @@ table = pd.DataFrame(
             "City": item.city,
             "Area": item.area,
             "AM": item.account_manager,
-            "Orders Available": item.canonical_order_count,
-            "Email Status": "READY" if item.email else "MISSING",
-            "RIB Status": "READY" if item.rib else "MISSING",
-            "Legal Status": "READY" if item.legal_entity else "MISSING",
+            "Identity": "READY" if item.readiness.identity_ready else "BLOCKING",
+            "Orders": "AVAILABLE" if item.readiness.orders_available else "NONE",
+            "Documents": "READY" if item.readiness.document_ready else "MISSING LEGAL",
+            "Email": "READY" if item.readiness.email_ready else "MISSING",
+            "Payment": "READY" if item.readiness.payment_ready else "MISSING RIB",
             "Mapping Status": item.mapping_status.value,
-            "Readiness": item.data_quality_status.value,
         }
         for item in filtered
     ]
