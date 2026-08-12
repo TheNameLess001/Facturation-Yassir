@@ -23,6 +23,7 @@ CANONICAL_ORDERS_NAME = "canonical_orders.parquet"
 def run_restaurant_registry(
     settings: Settings | None = None,
     drive: ReadOnlyDriveService | None = None,
+    canonical_orders_frame: pd.DataFrame | None = None,
 ) -> RestaurantRegistryResult:
     settings = settings or get_settings()
     if not settings.invoice_scope_file_id:
@@ -36,8 +37,10 @@ def run_restaurant_registry(
         active_worksheet=settings.invoice_scope_worksheet,
     )
     rst = reader.read_rst(settings.rst_list_file_id)
-    order_counts, order_names = _load_canonical_order_diagnostics(
-        active_drive, settings
+    order_counts, order_names = (
+        _canonical_order_diagnostics(canonical_orders_frame)
+        if canonical_orders_frame is not None
+        else _load_canonical_order_diagnostics(active_drive, settings)
     )
     result = RestaurantRegistryBuilder().build(
         invoice.frame,
@@ -75,6 +78,14 @@ def _load_canonical_order_diagnostics(
             "Exactly one canonical_orders.parquet artifact is required for diagnostics."
         )
     frame = pd.read_parquet(io.BytesIO(drive.download_file(matches[0].file_id)))
+    if "restaurant_id" not in frame.columns:
+        return {}, {}
+    return _canonical_order_diagnostics(frame)
+
+
+def _canonical_order_diagnostics(
+    frame: pd.DataFrame,
+) -> tuple[dict[str, int], dict[str, str]]:
     if "restaurant_id" not in frame.columns:
         return {}, {}
     normalized = frame["restaurant_id"].map(normalize_identifier)

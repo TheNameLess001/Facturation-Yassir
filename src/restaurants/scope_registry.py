@@ -568,10 +568,12 @@ class RestaurantRegistryBuilder:
             area=chosen.get("area"),
             account_manager=chosen.get("account_manager"),
             commission_rate=(
-                chosen.get("commission_rate")
-                if chosen.get("commission_rate") is not None
-                else source["commission_rate"]
+                source["commission_rate"]
+                if source["commission_rate"] is not None
+                else chosen.get("commission_rate")
             ),
+            invoice_scope_commission_rate=source["commission_rate"],
+            rst_commission_rate=chosen.get("commission_rate"),
             scope_source_row=int(source["source_row"]),
             rst_source_reference=f"RST row {chosen['source_row']}" if chosen else None,
             mapping_method=method,

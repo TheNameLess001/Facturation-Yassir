@@ -53,8 +53,12 @@ class SettlementRuleConfig(BaseModel):
                     reason="YASSIR_RESPONSIBILITY",
                 ),
                 "DRIVER": RuleOutcome(
-                    decision=FinancialDecision.PAY_PARTNER,
-                    reason="YASSIR_RESPONSIBILITY",
+                    decision=FinancialDecision.MANUAL_REVIEW,
+                    reason="COURIER_CANCELLATION_REQUIRES_REVIEW",
+                ),
+                "COURIER": RuleOutcome(
+                    decision=FinancialDecision.MANUAL_REVIEW,
+                    reason="COURIER_CANCELLATION_REQUIRES_REVIEW",
                 ),
             },
         )

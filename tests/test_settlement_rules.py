@@ -27,7 +27,8 @@ def test_yassir_and_driver_cancellation_rules_are_distinct() -> None:
         == FinancialDecision.YASSIR_COMPENSATION
     )
     assert (
-        engine.decide("CANCELLED", "DRIVER").decision == FinancialDecision.PAY_PARTNER
+        engine.decide("CANCELLED", "DRIVER").decision
+        == FinancialDecision.MANUAL_REVIEW
     )
 
 

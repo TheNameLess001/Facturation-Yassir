@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import calendar
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import streamlit as st
 
@@ -13,6 +17,8 @@ from src.restaurants.registry_models import (
     RegisteredRestaurant,
 )
 from src.restaurants.registry_runtime import run_restaurant_registry
+from src.settlement.periods import SettlementPeriodService
+from src.settlement.phase5_runtime import run_phase5_settlement
 from src.ui.layout import page_setup, render_kpis
 
 IDENTITY_BLOCKER_STATUSES = frozenset(
@@ -28,6 +34,11 @@ IDENTITY_BLOCKER_STATUSES = frozenset(
 @st.cache_data(ttl=900, show_spinner="Building the identity blocker workspace…")
 def load_registry():
     return run_restaurant_registry()
+
+
+@st.cache_data(ttl=900, show_spinner="Building the financial review queue…")
+def load_financial_review(period_code: str):
+    return run_phase5_settlement(period_code)
 
 
 def invoice_scope_url() -> str:
@@ -97,6 +108,104 @@ def render_copy_fix(case: MappingReviewCase) -> None:
         st.caption("Advisory confidence")
         st.code(case.correction_confidence.value, language=None)
     st.success("Correct the CASH-CO source row manually, then click Refresh Google Sources.")
+
+
+def render_financial_review() -> None:
+    settings = get_settings()
+    periods = SettlementPeriodService(settings.timezone)
+    today = datetime.now(ZoneInfo(settings.timezone)).date()
+    latest = periods.latest_complete(as_of=today)
+    controls = st.columns(4)
+    year = controls[0].selectbox(
+        "Year",
+        list(range(today.year, 2023, -1)),
+        index=max(0, today.year - latest.year),
+        key="review_financial_year",
+    )
+    month = controls[1].selectbox(
+        "Month",
+        list(range(1, 13)),
+        index=latest.month - 1,
+        format_func=lambda value: calendar.month_name[value],
+        key="review_financial_month",
+    )
+    half = controls[2].selectbox(
+        "Half",
+        ["P1", "P2"],
+        index=0 if latest.half == "P1" else 1,
+        key="review_financial_half",
+    )
+    selected = periods.create(year, month, half, as_of=today)
+    with controls[3]:
+        st.caption("Selected period")
+        st.markdown(f"**{selected.period_code}** · {selected.status.value}")
+    if st.button("Load Financial Review", type="primary"):
+        st.session_state["financial_review_period"] = selected.period_code
+    period_code = st.session_state.get("financial_review_period")
+    if not period_code:
+        st.info(
+            f"Latest complete period: {latest.period_code}. Load a period to see "
+            "system-derived review items."
+        )
+        return
+    try:
+        result = load_financial_review(period_code)
+    except (GoogleIntegrationError, ValueError, OSError) as exc:
+        st.error(f"Financial Review is unavailable: {exc}")
+        return
+    render_kpis(
+        [
+            ("MANUAL_REVIEW orders", f"{result.manual_review_orders:,}", "No automatic resolution"),
+            ("Unknown statuses", f"{result.unknown_statuses:,}", "Unconfigured source status"),
+            (
+                "Unknown responsibility",
+                f"{result.unknown_cancellation_responsibilities:,}",
+                "Cancellation requires review",
+            ),
+            ("Commission mismatches", f"{result.commission_mismatches:,}", "Restaurant-level blocker"),
+            ("Invalid financial rows", f"{result.invalid_financial_rows:,}", "Never coerced to zero"),
+        ]
+    )
+    rows = []
+    for restaurant in result.restaurants:
+        if "COMMISSION_MISMATCH" in restaurant.issue_codes:
+            rows.append(
+                {
+                    "Restaurant": restaurant.restaurant_name,
+                    "Restaurant ID": restaurant.restaurant_id,
+                    "Order ID": None,
+                    "Order Date": None,
+                    "Operational Status": None,
+                    "Cancellation Reason": None,
+                    "Responsibility": None,
+                    "Suggested Financial Decision": None,
+                    "Issue": "COMMISSION_MISMATCH",
+                }
+            )
+        for order in restaurant.orders:
+            if order.financial_decision.value != "MANUAL_REVIEW" and not any(
+                code.startswith("INVALID_") for code in order.issue_codes
+            ):
+                continue
+            rows.append(
+                {
+                    "Restaurant": restaurant.restaurant_name,
+                    "Restaurant ID": restaurant.restaurant_id,
+                    "Order ID": order.order_id,
+                    "Order Date": order.order_date,
+                    "Operational Status": order.source_order_status,
+                    "Cancellation Reason": order.cancellation_reason,
+                    "Responsibility": order.cancellation_responsibility.value,
+                    "Suggested Financial Decision": order.financial_decision.value,
+                    "Issue": " · ".join(order.issue_codes)
+                    or order.decision_trace.decision_rule,
+                }
+            )
+    st.markdown(f"### Financial Review · {period_code}")
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    st.warning(
+        "System-derived decisions only. Persistent manual reclassification is disabled until Phase 6."
+    )
 
 
 @st.dialog("Identity blocker review", width="large")
@@ -177,22 +286,36 @@ def mapping_dialog(
     st.caption(
         f"Current identity readiness: "
         f"{'READY' if restaurant.readiness.identity_ready else 'BLOCKING'} · "
-        "Settlement Engine is not implemented."
+        "blocked identities never enter settlement evaluation."
     )
 
 
-page_setup("Identity Blockers")
+page_setup("Review Queue")
 header, action = st.columns([4, 1])
 with header:
-    st.title("Identity Blockers")
+    st.title("Review Queue")
     st.caption(
-        "Final Invoice Scope correction workspace · Read-only Google sources"
+        "Identity correction and financial eligibility review · Read-only Google sources"
     )
 with action:
     if st.button("Refresh Google Sources", type="primary"):
         st.cache_data.clear()
         st.cache_resource.clear()
+        st.session_state.pop("financial_review_period", None)
         st.rerun()
+
+review_area = st.segmented_control(
+    "Review area",
+    ["IDENTITY REVIEW", "FINANCIAL REVIEW"],
+    default="IDENTITY REVIEW",
+)
+if review_area == "FINANCIAL REVIEW":
+    render_financial_review()
+    st.info(
+        "Invoice Scope, RST and Admin Earnings remain read-only. No decision is persisted."
+    )
+    st.warning("AUTOMATION OFF · WAITING FOR ADMIN AUTHORIZATION")
+    st.stop()
 
 try:
     registry = load_registry()
@@ -383,7 +506,7 @@ with st.expander("Readiness contract for the next phase"):
         f"- **IDENTITY_READY:** {len(registry.identity_ready_restaurants):,} restaurants may enter future settlement evaluation.\n"
         f"- **IDENTITY_BLOCKED:** {len(registry.identity_blocked_restaurants):,} restaurants remain excluded and visible here.\n"
         "- Missing RIB or legal data does not invalidate identity.\n"
-        "- Settlement remains **NOT EVALUATED**; no financial calculation exists."
+        "- Only identity-ready restaurants enter Phase 5 financial eligibility."
     )
 
 st.info(

@@ -231,6 +231,8 @@ class RegisteredRestaurant(BaseModel):
     area: str | None = None
     account_manager: str | None = None
     commission_rate: Decimal | None = None
+    invoice_scope_commission_rate: Decimal | None = None
+    rst_commission_rate: Decimal | None = None
     scope_source_row: int
     rst_source_reference: str | None = None
     mapping_method: str

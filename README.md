@@ -1,6 +1,6 @@
 # CashCo V2 — Partner Billing Control Tower
 
-CashCo V2 is a controlled billing and settlement workspace for restaurant partners. Its current source layer connects to Google Drive, ingests Admin Earnings, and builds an in-memory Restaurant Registry from the official Invoice Scope and RST List. Automation remains `OFF`, awaiting Admin authorization; settlement, document, email, and payment workflows are not enabled.
+CashCo V2 is a controlled billing and settlement workspace for restaurant partners. Its current source layer connects to Google Drive, ingests Admin Earnings, builds an in-memory Restaurant Registry from the official Invoice Scope and RST List, and evaluates P1/P2 financial eligibility. Automation remains `OFF`, awaiting Admin authorization; document, email, and payment workflows are not enabled.
 
 ## Architecture and source boundaries
 
@@ -22,7 +22,7 @@ Invoice Scope → RST Registry → Admin Earnings Orders → Settlement
 → Documents → Admin Authorization → Email
 ```
 
-Only the first three source/registry stages exist today. The downstream stages are future boundaries.
+The source, registry, and settlement-eligibility stages exist today. Documents and later stages remain future boundaries.
 
 ## Secure Google setup
 
@@ -110,13 +110,25 @@ Restaurant mapping is deterministic, in this order:
 
 Candidate ranking in Review Queue is advisory only. It may use name similarity, city, chain/brand tokens, and canonical Admin order availability to help a human locate the right RST record, but it never changes the mapping result. CashCo never fabricates Restaurant IDs, uses RIB as identity, silently fuzzy-matches names, or persists a second alias master. The authoritative correction is made manually in Invoice Scope, followed by **Refresh Google Sources**.
 
-Chain membership is organizational only; each store retains its own Restaurant ID and orders. Unmatched, ambiguous, and conflicting scope restaurants remain blocking for future identity readiness. Missing email, RIB, legal data, or commission is retained as a separate email/document/payment readiness issue and does not invalidate an otherwise exact identity mapping. Settlement readiness remains `NOT_EVALUATED` until the Settlement Engine exists.
+Chain membership is organizational only; each store retains its own Restaurant ID and orders. Unmatched, ambiguous, and conflicting scope restaurants remain blocking for identity readiness. Missing email, RIB, or legal data is retained as a separate email/document/payment readiness issue and does not invalidate an otherwise exact identity mapping. Missing or conflicting Invoice Scope commission blocks settlement eligibility without changing identity readiness.
 
 The registry remains in application memory under the current My Drive existing-file constraint. It does not call `files.create` and does not publish a new Drive artifact.
 
+## Phase 5 settlement eligibility
+
+Settlement periods are derived exclusively from the actual canonical `order_date`: P1 is day 1 through 15 inclusive, and P2 is day 16 through the last calendar day. Filename week, upload date, and Drive modification time never determine a settlement period. The default selector is the latest complete period; open or future periods are labeled explicitly.
+
+Phase 5 evaluates only canonical Admin Earnings orders whose Restaurant ID belongs to an identity-ready Invoice Scope restaurant. Identity-blocked and out-of-scope orders are counted separately and never enter financial calculations. Operational source status is immutable and separate from the system-derived financial decision. Unknown statuses and cancellation responsibilities remain `MANUAL_REVIEW`; no fuzzy cancellation rule or persistent override exists.
+
+Invoice Scope commission is authoritative for settlement eligibility. RST commission is validation-only: a missing Invoice Scope commission or a material mismatch blocks that restaurant. Financial arithmetic uses `Decimal`, invalid values remain null/blocking, and count and money reconciliation prevent unexplained order loss.
+
+### LegacyCalculationPolicy status
+
+The full authoritative legacy CashCo implementation is **not present** in this repository, its reachable Git history, or available reference files. The initial repository prototype documents only `payable`, a `ROUND_HALF_UP` commission calculation, and `net payable`; it contains no authoritative HT, TVA, TTC, note de débours, or final document formulas. Phase 5 therefore profiles and classifies real orders and calculates safe settlement inputs, but deliberately leaves those unavailable legacy outputs null. They must not be inferred or redesigned without an authoritative legacy reference.
+
 ## Source discovery boundary
 
-The Data Sources page validates the real service-account connection, checks each active configured Drive location independently, inventories Admin Earnings sources, and maintains a metadata manifest. Overall readiness depends on Google authentication, Admin Earnings, Invoice Scope, RST List, and the required CashCo workspace folders. Finance Tracking has no effect. No settlement, Google restaurant Sheet, document, email, or payment workflow is enabled.
+The Data Sources page validates the real service-account connection, checks each active configured Drive location independently, inventories Admin Earnings sources, and maintains a metadata manifest. Overall readiness depends on Google authentication, Admin Earnings, Invoice Scope, RST List, and the required CashCo workspace folders. Finance Tracking has no effect. Settlement evaluation is read-only and in memory; no Google restaurant Sheet, document, email, or payment workflow is enabled.
 
 ## Phase 3.1 conflict diagnostics
 
