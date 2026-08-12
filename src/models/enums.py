@@ -1,0 +1,112 @@
+from enum import StrEnum
+
+
+class Role(StrEnum):
+    ADMIN = "ADMIN"
+    FINANCE = "FINANCE"
+    VIEWER = "VIEWER"
+
+
+class AutomationMode(StrEnum):
+    OFF = "OFF"
+    PREVIEW_ONLY = "PREVIEW_ONLY"
+    CREATE_DRAFTS = "CREATE_DRAFTS"
+    SEND_EMAILS = "SEND_EMAILS"
+
+
+class WorkflowState(StrEnum):
+    DRAFT = "DRAFT"
+    DATA_READY = "DATA_READY"
+    TO_REVIEW = "TO_REVIEW"
+    VALIDATED = "VALIDATED"
+    DOCUMENTS_GENERATED = "DOCUMENTS_GENERATED"
+    EMAIL_READY = "EMAIL_READY"
+    AUTHORIZED = "AUTHORIZED"
+    SENDING = "SENDING"
+    SENT = "SENT"
+    PAID = "PAID"
+    LOCKED = "LOCKED"
+    BLOCKED = "BLOCKED"
+    AUTHORIZATION_STALE = "AUTHORIZATION_STALE"
+
+
+class FinancialDecision(StrEnum):
+    PAY_PARTNER = "PAY_PARTNER"
+    EXCLUDE = "EXCLUDE"
+    YASSIR_COMPENSATION = "YASSIR_COMPENSATION"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+
+
+class DocumentStatus(StrEnum):
+    MISSING = "MISSING"
+    GENERATED = "GENERATED"
+    STALE = "STALE"
+
+
+class EmailStatus(StrEnum):
+    WAITING_ADMIN_AUTHORIZATION = "WAITING_ADMIN_AUTHORIZATION"
+    READY = "READY"
+    AUTHORIZED = "AUTHORIZED"
+    SENDING = "SENDING"
+    SENT = "SENT"
+    FAILED = "FAILED"
+
+
+class AuditLevel(StrEnum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    BLOCKING = "BLOCKING"
+
+
+class SourceType(StrEnum):
+    ADMIN_EARNINGS = "ADMIN_EARNINGS"
+    PAYMENT_SCOPE = "PAYMENT_SCOPE"
+    RST_LIST = "RST_LIST"
+
+
+class ChangeState(StrEnum):
+    NEW = "NEW"
+    UNCHANGED = "UNCHANGED"
+    MODIFIED = "MODIFIED"
+    MISSING = "MISSING"
+    INACCESSIBLE = "INACCESSIBLE"
+
+
+class HealthState(StrEnum):
+    HEALTHY = "HEALTHY"
+    WARNING = "WARNING"
+    BLOCKING = "BLOCKING"
+    UNKNOWN = "UNKNOWN"
+
+
+class SourceStatus(StrEnum):
+    FOUND = "FOUND"
+    MISSING = "MISSING"
+    INACCESSIBLE = "INACCESSIBLE"
+    AMBIGUOUS = "AMBIGUOUS"
+    INVALID_FILE_TYPE = "INVALID_FILE_TYPE"
+    MANUAL_MAPPING_REQUIRED = "MANUAL_MAPPING_REQUIRED"
+
+
+class ConnectionState(StrEnum):
+    CONNECTED = "CONNECTED"
+    MOCK = "MOCK"
+    NOT_CONFIGURED = "NOT_CONFIGURED"
+    ERROR = "ERROR"
+
+
+class IngestionStatus(StrEnum):
+    NOT_RUN = "NOT_RUN"
+    SUCCESS = "SUCCESS"
+    COMPLETED_WITH_WARNINGS = "COMPLETED_WITH_WARNINGS"
+    BLOCKED = "BLOCKED"
+
+
+class DuplicateKind(StrEnum):
+    EXACT = "EXACT"
+    CONFLICTING = "CONFLICTING"
+
+
+class EligibilityState(StrEnum):
+    ELIGIBLE = "ELIGIBLE"
+    OUT_OF_SCOPE = "OUT_OF_SCOPE"
