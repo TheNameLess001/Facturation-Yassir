@@ -7,8 +7,10 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
+from src.auth import AuthService
 from src.config import get_settings
 from src.google.exceptions import GoogleIntegrationError
+from src.models.enums import FinancialDecision
 from src.restaurants.registry_models import (
     CorrectionConfidence,
     MappingReviewCase,
@@ -17,8 +19,13 @@ from src.restaurants.registry_models import (
     RegisteredRestaurant,
 )
 from src.restaurants.registry_runtime import run_restaurant_registry
+from src.settlement.overrides import (
+    FinancialOverrideRepository,
+    FinancialOverrideService,
+    OverrideReasonCode,
+)
 from src.settlement.periods import SettlementPeriodService
-from src.settlement.phase5_runtime import run_phase5_settlement
+from src.settlement.phase5_runtime import load_phase5_workspace
 from src.ui.layout import page_setup, render_kpis
 
 IDENTITY_BLOCKER_STATUSES = frozenset(
@@ -38,7 +45,111 @@ def load_registry():
 
 @st.cache_data(ttl=900, show_spinner="Building the financial review queue…")
 def load_financial_review(period_code: str):
-    return run_phase5_settlement(period_code)
+    return load_phase5_workspace(period_code)
+
+
+@st.dialog("Financial decision review", width="large")
+def financial_review_dialog(order, restaurant) -> None:
+    st.markdown(f"### {restaurant.restaurant_name or restaurant.restaurant_id}")
+    st.caption(f"Order {order.order_id} · {order.order_date}")
+    source, decision, financial = st.columns(3)
+    with source:
+        st.markdown("#### Source")
+        st.write(
+            {
+                "Operational status": order.source_order_status,
+                "Cancellation reason": order.cancellation_reason,
+                "Responsibility": order.cancellation_responsibility.value,
+            }
+        )
+    with decision:
+        st.markdown("#### Decision trace")
+        st.write(
+            {
+                "System decision": order.system_financial_decision.value,
+                "Final decision": order.final_financial_decision.value,
+                "Rule": order.decision_trace.decision_rule,
+                "Source fields": order.decision_trace.source_fields_used,
+                "Engine": order.decision_trace.engine_version,
+            }
+        )
+    with financial:
+        st.markdown("#### Financial fields")
+        st.write(
+            {
+                "Order amount": order.order_amount,
+                "Promo": order.promo_amount,
+                "Delivery fee": order.delivery_fee,
+                "Source commission": order.source_commission_amount,
+            }
+        )
+    settings = get_settings()
+    repository = FinancialOverrideRepository(
+        settings.financial_override_registry_path
+    )
+    history = repository.list_for_order(restaurant.period_code, order.order_id)
+    with st.expander(f"Override history · {len(history)}"):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Previous": item.previous_decision.value,
+                        "New": item.new_decision.value,
+                        "Reason": item.reason_code.value,
+                        "Who": item.created_by,
+                        "When": item.created_at,
+                        "Why": item.comment,
+                        "Supersedes": item.supersedes_override_id,
+                    }
+                    for item in history
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+    st.markdown("#### Override Decision")
+    new_decision = st.selectbox(
+        "Final decision",
+        list(FinancialDecision),
+        format_func=lambda item: item.value,
+    )
+    reason = st.selectbox(
+        "Reason code",
+        list(OverrideReasonCode),
+        format_func=lambda item: item.value,
+    )
+    comment = st.text_area(
+        "Comment",
+        help="Required when reason is OTHER.",
+    )
+    confirmed = st.checkbox(
+        "I confirm this financial decision changes the final settlement result."
+    )
+    if st.button(
+        "Save immutable override",
+        type="primary",
+        disabled=(not confirmed or new_decision == order.final_financial_decision),
+    ):
+        user = AuthService(settings).current_user()
+        try:
+            FinancialOverrideService(repository).create(
+                period_code=restaurant.period_code,
+                restaurant_id=restaurant.restaurant_id,
+                order_id=order.order_id,
+                system_decision=order.system_financial_decision,
+                new_decision=new_decision,
+                reason_code=reason,
+                comment=comment or None,
+                created_by=user.user_id,
+                source_engine_version=order.decision_trace.engine_version,
+                source_decision_rule=order.decision_trace.decision_rule,
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            st.cache_data.clear()
+            st.success("Override appended. Source operational data was not changed.")
+            st.rerun()
 
 
 def invoice_scope_url() -> str:
@@ -110,7 +221,7 @@ def render_copy_fix(case: MappingReviewCase) -> None:
     st.success("Correct the CASH-CO source row manually, then click Refresh Google Sources.")
 
 
-def render_financial_review() -> None:
+def render_financial_review(view: str) -> None:
     settings = get_settings()
     periods = SettlementPeriodService(settings.timezone)
     today = datetime.now(ZoneInfo(settings.timezone)).date()
@@ -149,13 +260,15 @@ def render_financial_review() -> None:
         )
         return
     try:
-        result = load_financial_review(period_code)
+        workspace = load_financial_review(period_code)
+        result = workspace.summary
     except (GoogleIntegrationError, ValueError, OSError) as exc:
         st.error(f"Financial Review is unavailable: {exc}")
         return
     render_kpis(
         [
             ("MANUAL_REVIEW orders", f"{result.manual_review_orders:,}", "No automatic resolution"),
+            ("Overrides Applied", f"{result.overrides_applied:,}", "Latest valid override"),
             ("Unknown statuses", f"{result.unknown_statuses:,}", "Unconfigured source status"),
             (
                 "Unknown responsibility",
@@ -166,43 +279,116 @@ def render_financial_review() -> None:
             ("Invalid financial rows", f"{result.invalid_financial_rows:,}", "Never coerced to zero"),
         ]
     )
+    commission_rows = [
+        {
+            "Restaurant": item.restaurant_name,
+            "Restaurant ID": item.restaurant_id,
+            "Scope Commission": item.commission_resolution.scope_commission,
+            "RST Commission": item.commission_resolution.rst_commission,
+            "Difference": item.commission_resolution.difference,
+            "Orders": item.total_orders,
+            "Potential Financial Impact": (
+                item.commission_resolution.potential_financial_impact
+            ),
+            "Resolution Status": item.commission_resolution.status.value,
+            "Authority": item.commission_resolution.resolution_source,
+        }
+        for item in result.restaurants
+        if item.commission_resolution.status.value
+        in {"MISMATCH", "RST_ONLY", "MISSING"}
+    ]
+    if view == "COMMISSION REVIEW":
+        st.markdown("### Commission Issues")
+        st.caption(
+            "Invoice Scope is authoritative when valid. RST differences remain visible diagnostics."
+        )
+        st.dataframe(pd.DataFrame(commission_rows), hide_index=True, width="stretch")
+        return
+    registry_by_id = {
+        item.restaurant_id: item for item in workspace.registry.restaurants
+    }
     rows = []
+    row_objects = []
     for restaurant in result.restaurants:
-        if "COMMISSION_MISMATCH" in restaurant.issue_codes:
-            rows.append(
-                {
-                    "Restaurant": restaurant.restaurant_name,
-                    "Restaurant ID": restaurant.restaurant_id,
-                    "Order ID": None,
-                    "Order Date": None,
-                    "Operational Status": None,
-                    "Cancellation Reason": None,
-                    "Responsibility": None,
-                    "Suggested Financial Decision": None,
-                    "Issue": "COMMISSION_MISMATCH",
-                }
-            )
         for order in restaurant.orders:
-            if order.financial_decision.value != "MANUAL_REVIEW" and not any(
-                code.startswith("INVALID_") for code in order.issue_codes
+            invalid = any(code.startswith("INVALID_") for code in order.issue_codes)
+            if view == "DATA ISSUES" and not invalid:
+                continue
+            if view == "FINANCIAL REVIEW" and (
+                order.final_financial_decision.value != "MANUAL_REVIEW" or invalid
             ):
                 continue
+            registered = registry_by_id.get(restaurant.restaurant_id)
             rows.append(
                 {
                     "Restaurant": restaurant.restaurant_name,
                     "Restaurant ID": restaurant.restaurant_id,
+                    "City": registered.city if registered else None,
+                    "AM": registered.account_manager if registered else None,
                     "Order ID": order.order_id,
                     "Order Date": order.order_date,
                     "Operational Status": order.source_order_status,
                     "Cancellation Reason": order.cancellation_reason,
                     "Responsibility": order.cancellation_responsibility.value,
-                    "Suggested Financial Decision": order.financial_decision.value,
+                    "System Decision": order.system_financial_decision.value,
+                    "Final Decision": order.final_financial_decision.value,
+                    "Amount": order.order_amount,
+                    "Override": "APPLIED" if order.manual_override_applied else "NONE",
                     "Issue": " · ".join(order.issue_codes)
                     or order.decision_trace.decision_rule,
+                    "Action": "Review",
                 }
             )
-    st.markdown(f"### Financial Review · {period_code}")
-    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+            row_objects.append((order, restaurant))
+    st.markdown(f"### {view.title()} · {period_code}")
+    filters = st.columns(4)
+    restaurant_filter = filters[0].text_input(
+        "Restaurant", key="financial_restaurant_filter"
+    )
+    decision_filter = filters[1].selectbox(
+        "Decision",
+        ["All", *(item.value for item in FinancialDecision)],
+        key="financial_decision_filter",
+    )
+    responsibility_filter = filters[2].selectbox(
+        "Responsibility",
+        ["All", *sorted({row["Responsibility"] for row in rows})],
+        key="financial_responsibility_filter",
+    )
+    issue_filter = filters[3].text_input("Issue", key="financial_issue_filter")
+    visible = list(zip(rows, row_objects, strict=True))
+    if restaurant_filter:
+        needle = restaurant_filter.casefold()
+        visible = [
+            item
+            for item in visible
+            if needle in (item[0]["Restaurant"] or "").casefold()
+        ]
+    if decision_filter != "All":
+        visible = [
+            item for item in visible if item[0]["Final Decision"] == decision_filter
+        ]
+    if responsibility_filter != "All":
+        visible = [
+            item
+            for item in visible
+            if item[0]["Responsibility"] == responsibility_filter
+        ]
+    if issue_filter:
+        needle = issue_filter.casefold()
+        visible = [
+            item for item in visible if needle in item[0]["Issue"].casefold()
+        ]
+    event = st.dataframe(
+        pd.DataFrame([item[0] for item in visible]),
+        hide_index=True,
+        width="stretch",
+        on_select="rerun",
+        selection_mode="single-row",
+    )
+    if event.selection.rows:
+        order, restaurant = visible[event.selection.rows[0]][1]
+        financial_review_dialog(order, restaurant)
     st.warning(
         "System-derived decisions only. Persistent manual reclassification is disabled until Phase 6."
     )
@@ -306,11 +492,16 @@ with action:
 
 review_area = st.segmented_control(
     "Review area",
-    ["IDENTITY REVIEW", "FINANCIAL REVIEW"],
+    [
+        "IDENTITY REVIEW",
+        "FINANCIAL REVIEW",
+        "COMMISSION REVIEW",
+        "DATA ISSUES",
+    ],
     default="IDENTITY REVIEW",
 )
-if review_area == "FINANCIAL REVIEW":
-    render_financial_review()
+if review_area != "IDENTITY REVIEW":
+    render_financial_review(review_area)
     st.info(
         "Invoice Scope, RST and Admin Earnings remain read-only. No decision is persisted."
     )

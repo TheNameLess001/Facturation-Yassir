@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from src.config import get_settings
+from src.documents.phase8 import Phase8DocumentEngine
 from src.google.auth import build_google_credentials
 from src.google.drive_service import GoogleDriveService
 from src.restaurants.registry_runtime import run_restaurant_registry
@@ -89,6 +90,59 @@ def main() -> None:
         print("money_difference", result.money_reconciliation[0].difference)
         print("money_blocking_rows", result.money_reconciliation[0].blocking_rows)
         print("blocked_order_gmv", result.identity_blocked.blocked_gmv)
+        if period.period_code == "2026-07-P2":
+            registry_by_id = {
+                item.restaurant_id: item
+                for item in registry.restaurants
+                if item.restaurant_id is not None
+            }
+            document_readiness = [
+                Phase8DocumentEngine().readiness(
+                    registry_by_id[item.restaurant_id], item
+                )
+                for item in result.restaurants
+                if item.restaurant_id in registry_by_id
+            ]
+            print(
+                "documents_potentially_eligible",
+                sum(item.potentially_eligible for item in document_readiness),
+            )
+            print(
+                "documents_blocked_manual_review",
+                sum(item.manual_review_orders > 0 for item in result.restaurants),
+            )
+            print(
+                "documents_blocked_commission",
+                sum(
+                    item.commission_resolution.effective_commission is None
+                    and item.total_orders > 0
+                    for item in result.restaurants
+                ),
+            )
+            print(
+                "documents_blocked_invalid_financial",
+                sum(
+                    any(
+                        code.startswith("INVALID_") for code in item.issue_codes
+                    )
+                    for item in result.restaurants
+                ),
+            )
+            print(
+                "documents_blocked_legal",
+                sum(not item.legal_ready for item in document_readiness),
+            )
+            print(
+                "documents_blocked_formula",
+                sum(
+                    "LEGACY_FORMULA_VALIDATION_REQUIRED" in item.issue_codes
+                    for item in document_readiness
+                ),
+            )
+            print(
+                "financially_ready_with_orders",
+                result.restaurant_status_count(RestaurantSettlementStatus.READY),
+            )
     profile = results[0].status_profile
     print("STATUS_PROFILE")
     for item in profile.operational_statuses:

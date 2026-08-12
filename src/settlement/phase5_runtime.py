@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass
 
 import pandas as pd
 
@@ -9,7 +10,9 @@ from src.google.auth import build_google_credentials
 from src.google.drive_service import GoogleDriveService
 from src.google.exceptions import SourceDiscoveryError
 from src.google.interfaces import ReadOnlyDriveService
+from src.restaurants.registry_models import RestaurantRegistryResult
 from src.restaurants.registry_runtime import run_restaurant_registry
+from src.settlement.overrides import FinancialOverrideRepository
 from src.settlement.periods import SettlementPeriodService
 from src.settlement.phase5_models import SettlementSummary
 from src.settlement.phase5_service import Phase5SettlementService
@@ -18,11 +21,25 @@ CANONICAL_ORDERS_NAME = "canonical_orders.parquet"
 INGESTION_ISSUES_NAME = "ingestion_issues.parquet"
 
 
+@dataclass(frozen=True)
+class Phase5Workspace:
+    summary: SettlementSummary
+    registry: RestaurantRegistryResult
+
+
 def run_phase5_settlement(
     period_code: str,
     settings: Settings | None = None,
     drive: ReadOnlyDriveService | None = None,
 ) -> SettlementSummary:
+    return load_phase5_workspace(period_code, settings=settings, drive=drive).summary
+
+
+def load_phase5_workspace(
+    period_code: str,
+    settings: Settings | None = None,
+    drive: ReadOnlyDriveService | None = None,
+) -> Phase5Workspace:
     active_settings = settings or get_settings()
     active_drive = drive or GoogleDriveService(
         build_google_credentials(active_settings)
@@ -37,12 +54,17 @@ def run_phase5_settlement(
         canonical_orders_frame=canonical,
     )
     period = SettlementPeriodService(active_settings.timezone).get(period_code)
-    return Phase5SettlementService().evaluate(
+    overrides = FinancialOverrideRepository(
+        active_settings.financial_override_registry_path
+    ).list_for_period(period_code)
+    summary = Phase5SettlementService().evaluate(
         period,
         canonical,
         registry,
         invalid_financial_issues=ingestion_issues,
+        overrides=overrides,
     )
+    return Phase5Workspace(summary=summary, registry=registry)
 
 
 def load_phase5_processed_inputs(

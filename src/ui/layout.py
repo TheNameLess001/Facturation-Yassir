@@ -7,18 +7,22 @@ from src.config import get_settings
 from src.ui.styles import CSS
 
 
-def page_setup(title: str) -> None:
+def page_setup(title: str, *, period_code: str | None = None, issues: int = 0) -> None:
     st.markdown(CSS, unsafe_allow_html=True)
-    page_header()
+    page_header(period_code=period_code, issues=issues)
 
 
-def page_header() -> None:
+def page_header(*, period_code: str | None = None, issues: int = 0) -> None:
     user = AuthService(get_settings()).current_user()
+    selected_period = period_code or st.session_state.get(
+        "phase5_period", "2026-07-P2"
+    )
     st.markdown(
-        f"""<div class="cc-header"><div><div class="cc-brand">CashCo</div>
-        <div class="cc-subtitle">Partner Billing Control Tower</div></div>
-        <div class="cc-meta"><span class="cc-chip">2026-08-P1</span>
-        <span class="cc-chip">Source layer · Real</span><span class="cc-chip">{user.name} · {user.role}</span>
+        f"""<div class="cc-header"><div class="cc-brand-wrap"><div class="cc-brand-mark">C</div><div><div class="cc-brand">CashCo</div>
+        <div class="cc-subtitle">Financial Operations Control Tower</div></div></div>
+        <div class="cc-meta"><span class="cc-chip search">⌕ Global search</span>
+        <span class="cc-chip">{selected_period}</span><span class="cc-chip">↻ Refresh</span>
+        <span class="cc-chip issue">! {issues} issues</span><span class="cc-chip">{user.name} · {user.role}</span>
         <span class="cc-chip off">Automation OFF</span></div></div>""",
         unsafe_allow_html=True,
     )
@@ -48,6 +52,15 @@ def render_kpis(items: Sequence[tuple[str, str, str]]) -> None:
 
 def status_badge(label: str, tone: str = "neutral") -> str:
     return f'<span class="cc-status {tone}">{label}</span>'
+
+
+def render_alerts(items: Sequence[tuple[str, str, str]]) -> None:
+    cards = "".join(
+        f'<div class="cc-alert {tone}"><div class="cc-alert-label">{label}</div>'
+        f'<div class="cc-alert-value">{value}</div></div>'
+        for label, value, tone in items
+    )
+    st.markdown(f'<div class="cc-alert-grid">{cards}</div>', unsafe_allow_html=True)
 
 
 def placeholder_page(title: str, description: str) -> None:

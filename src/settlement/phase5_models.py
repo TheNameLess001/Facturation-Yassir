@@ -78,6 +78,24 @@ class RestaurantSettlementStatus(StrEnum):
     NO_ORDERS = "NO_ORDERS"
 
 
+class CommissionResolutionStatus(StrEnum):
+    MATCH = "MATCH"
+    SCOPE_ONLY = "SCOPE_ONLY"
+    RST_ONLY = "RST_ONLY"
+    MISMATCH = "MISMATCH"
+    MISSING = "MISSING"
+
+
+class CommissionResolution(Phase5Model):
+    scope_commission: Decimal | None = None
+    rst_commission: Decimal | None = None
+    difference: Decimal | None = None
+    status: CommissionResolutionStatus
+    effective_commission: Decimal | None = None
+    resolution_source: str
+    potential_financial_impact: Decimal | None = None
+
+
 class SettlementDecisionTrace(Phase5Model):
     decision: FinancialDecision
     decision_rule: str
@@ -96,6 +114,9 @@ class SettlementOrder(Phase5Model):
     financial_classification: OperationalClassification
     cancellation_responsibility: CancellationResponsibility
     financial_decision: FinancialDecision
+    final_financial_decision: FinancialDecision
+    manual_override_applied: bool = False
+    latest_override_id: str | None = None
     decision_trace: SettlementDecisionTrace
     order_amount: Decimal | None = None
     order_amount_source_field: str = "item_total"
@@ -105,6 +126,10 @@ class SettlementOrder(Phase5Model):
     source_commission_amount: Decimal | None = None
     commission_base: Decimal | None = None
     issue_codes: tuple[str, ...] = ()
+
+    @property
+    def system_financial_decision(self) -> FinancialDecision:
+        return self.financial_decision
 
 
 class IdentityBlockedDiagnostic(Phase5Model):
@@ -121,6 +146,7 @@ class RestaurantSettlementEvaluation(Phase5Model):
     commission_rate: Decimal | None = None
     invoice_scope_commission_rate: Decimal | None = None
     rst_commission_rate: Decimal | None = None
+    commission_resolution: CommissionResolution
     total_orders: int
     delivered_orders: int
     cancelled_orders: int
@@ -233,6 +259,7 @@ class SettlementSummary(Phase5Model):
     unknown_cancellation_responsibilities: int
     commission_mismatches: int
     invalid_financial_rows: int
+    overrides_applied: int = 0
     restaurants: tuple[RestaurantSettlementEvaluation, ...]
     identity_blocked: IdentityBlockedDiagnostic
     status_profile: AdminStatusProfile

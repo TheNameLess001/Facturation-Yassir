@@ -19,9 +19,12 @@ from src.settlement.financial_rules import (
     ENGINE_VERSION,
     FinancialEligibilityRuleEngine,
 )
+from src.settlement.overrides import FinancialOverride, latest_overrides
 from src.settlement.phase5_models import (
     AdminStatusProfile,
     CancellationResponsibility,
+    CommissionResolution,
+    CommissionResolutionStatus,
     IdentityBlockedDiagnostic,
     LegacyCalculationPolicy,
     MoneyReconciliation,
@@ -54,12 +57,16 @@ class Phase5SettlementService:
         registry: RestaurantRegistryResult,
         *,
         invalid_financial_issues: pd.DataFrame | None = None,
+        overrides: tuple[FinancialOverride, ...] = (),
         evaluated_at: datetime | None = None,
     ) -> SettlementSummary:
         now = evaluated_at or datetime.now(UTC)
         frame = self._canonical_period(canonical_orders, period)
         invalid_by_order = self._invalid_issue_map(invalid_financial_issues)
         status_profile = self._status_profile(canonical_orders)
+        override_by_order = latest_overrides(
+            tuple(item for item in overrides if item.period_code == period.period_code)
+        )
 
         ready_restaurants = tuple(registry.identity_ready_restaurants)
         blocked_restaurants = tuple(registry.identity_blocked_restaurants)
@@ -105,11 +112,14 @@ class Phase5SettlementService:
                 restaurant_id,
                 invalid_by_order,
                 now,
+                override_by_order.get(normalize_identifier(row.get("order_id")) or ""),
             )
             orders_by_restaurant[restaurant_id].append(settlement_order)
             evaluated_orders.append(settlement_order)
 
-        decision_counts = Counter(item.financial_decision for item in evaluated_orders)
+        decision_counts = Counter(
+            item.final_financial_decision for item in evaluated_orders
+        )
         reconciled_count = sum(decision_counts.values())
         if reconciled_count != len(evaluated_orders):
             raise ValueError("Financial decision reconciliation failed")
@@ -186,6 +196,9 @@ class Phase5SettlementService:
             unknown_cancellation_responsibilities=unknown_responsibilities,
             commission_mismatches=commission_mismatches,
             invalid_financial_rows=invalid_rows,
+            overrides_applied=sum(
+                item.manual_override_applied for item in evaluated_orders
+            ),
             restaurants=restaurant_results,
             identity_blocked=IdentityBlockedDiagnostic(
                 blocked_restaurants=len(blocked_restaurants),
@@ -215,6 +228,7 @@ class Phase5SettlementService:
         restaurant_id: str,
         invalid_by_order: dict[str, tuple[str, ...]],
         now: datetime,
+        override: FinancialOverride | None,
     ) -> SettlementOrder:
         order_id = normalize_identifier(row.get("order_id"))
         if order_id is None:
@@ -225,6 +239,9 @@ class Phase5SettlementService:
         status = self._text(row.get("operational_status"))
         cancellation_reason = self._text(row.get("cancellation_reason"))
         outcome = self.rules.classify(status, cancellation_reason)
+        if override is not None and override.restaurant_id != restaurant_id:
+            raise ValueError("Financial override Restaurant ID does not match order")
+        final_decision = override.new_decision if override else outcome.decision
         amount = self._decimal(row.get("item_total"))
         issues = list(invalid_by_order.get(order_id, ()))
         if amount is None:
@@ -245,6 +262,9 @@ class Phase5SettlementService:
             financial_classification=outcome.classification,
             cancellation_responsibility=outcome.responsibility,
             financial_decision=outcome.decision,
+            final_financial_decision=final_decision,
+            manual_override_applied=override is not None,
+            latest_override_id=str(override.override_id) if override else None,
             decision_trace=outcome.trace(status, cancellation_reason, created_at=now),
             order_amount=amount,
             item_total=amount,
@@ -286,13 +306,18 @@ class Phase5SettlementService:
         for order in orders:
             issues.extend(order.issue_codes)
         unique_issues = tuple(dict.fromkeys(issues))
-        decisions = Counter(item.financial_decision for item in orders)
+        decisions = Counter(item.final_financial_decision for item in orders)
         classifications = Counter(item.financial_classification for item in orders)
         gross = self._sum_amounts(orders)
         eligible = self._sum_decision(orders, FinancialDecision.PAY_PARTNER)
         excluded = self._sum_decision(orders, FinancialDecision.EXCLUDE)
         compensation = self._sum_decision(
             orders, FinancialDecision.YASSIR_COMPENSATION
+        )
+        commission_resolution = resolve_commission(
+            scope_rate,
+            rst_rate,
+            None,
         )
         if not orders:
             status = RestaurantSettlementStatus.NO_ORDERS
@@ -301,7 +326,6 @@ class Phase5SettlementService:
             in {
                 "MISSING_INVOICE_SCOPE_COMMISSION",
                 "INVALID_INVOICE_SCOPE_COMMISSION",
-                "COMMISSION_MISMATCH",
             }
             for code in unique_issues
         ):
@@ -322,6 +346,7 @@ class Phase5SettlementService:
             commission_rate=scope_rate,
             invoice_scope_commission_rate=scope_rate,
             rst_commission_rate=rst_rate,
+            commission_resolution=commission_resolution,
             total_orders=len(orders),
             delivered_orders=classifications[OperationalClassification.DELIVERED],
             cancelled_orders=classifications[OperationalClassification.CANCELLED],
@@ -440,7 +465,8 @@ class Phase5SettlementService:
             (
                 item.order_amount
                 for item in orders
-                if item.financial_decision == decision and item.order_amount is not None
+                if item.final_financial_decision == decision
+                and item.order_amount is not None
             ),
             ZERO,
         )
@@ -481,3 +507,48 @@ def normalize_commission_rate(
     if rate > 1:
         rate /= Decimal(100)
     return rate, None
+
+
+def resolve_commission(
+    scope_rate: Decimal | None,
+    rst_rate: Decimal | None,
+    financial_base: Decimal | None = None,
+) -> CommissionResolution:
+    if scope_rate is not None and rst_rate is not None:
+        difference = scope_rate - rst_rate
+        status = (
+            CommissionResolutionStatus.MATCH
+            if abs(difference) <= COMMISSION_TOLERANCE
+            else CommissionResolutionStatus.MISMATCH
+        )
+        effective = scope_rate
+        source = "INVOICE_SCOPE_AUTHORITY"
+    elif scope_rate is not None:
+        difference = None
+        status = CommissionResolutionStatus.SCOPE_ONLY
+        effective = scope_rate
+        source = "INVOICE_SCOPE_AUTHORITY"
+    elif rst_rate is not None:
+        difference = None
+        status = CommissionResolutionStatus.RST_ONLY
+        effective = None
+        source = "NO_AUTHORIZED_FALLBACK"
+    else:
+        difference = None
+        status = CommissionResolutionStatus.MISSING
+        effective = None
+        source = "MISSING"
+    impact = (
+        abs(difference) * financial_base
+        if difference is not None and financial_base is not None
+        else None
+    )
+    return CommissionResolution(
+        scope_commission=scope_rate,
+        rst_commission=rst_rate,
+        difference=difference,
+        status=status,
+        effective_commission=effective,
+        resolution_source=source,
+        potential_financial_impact=impact,
+    )

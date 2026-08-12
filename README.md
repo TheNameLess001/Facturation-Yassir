@@ -118,17 +118,37 @@ The registry remains in application memory under the current My Drive existing-f
 
 Settlement periods are derived exclusively from the actual canonical `order_date`: P1 is day 1 through 15 inclusive, and P2 is day 16 through the last calendar day. Filename week, upload date, and Drive modification time never determine a settlement period. The default selector is the latest complete period; open or future periods are labeled explicitly.
 
-Phase 5 evaluates only canonical Admin Earnings orders whose Restaurant ID belongs to an identity-ready Invoice Scope restaurant. Identity-blocked and out-of-scope orders are counted separately and never enter financial calculations. Operational source status is immutable and separate from the system-derived financial decision. Unknown statuses and cancellation responsibilities remain `MANUAL_REVIEW`; no fuzzy cancellation rule or persistent override exists.
+Phase 5 evaluates only canonical Admin Earnings orders whose Restaurant ID belongs to an identity-ready Invoice Scope restaurant. Identity-blocked and out-of-scope orders are counted separately and never enter financial calculations. Operational source status is immutable and separate from the system-derived financial decision. Unknown statuses and cancellation responsibilities remain `MANUAL_REVIEW`; no fuzzy cancellation rule is applied. Phase 6 can layer an append-only manual override over that unchanged system decision.
 
-Invoice Scope commission is authoritative for settlement eligibility. RST commission is validation-only: a missing Invoice Scope commission or a material mismatch blocks that restaurant. Financial arithmetic uses `Decimal`, invalid values remain null/blocking, and count and money reconciliation prevent unexplained order loss.
+Invoice Scope commission is authoritative for settlement eligibility. RST commission is validation-only: a mismatch is visible but uses the valid Scope rate, while a missing or invalid Scope rate blocks the restaurant. Financial arithmetic uses `Decimal`, invalid values remain null/blocking, and count and money reconciliation prevent unexplained order loss.
 
 ### LegacyCalculationPolicy status
 
 The full authoritative legacy CashCo implementation is **not present** in this repository, its reachable Git history, or available reference files. The initial repository prototype documents only `payable`, a `ROUND_HALF_UP` commission calculation, and `net payable`; it contains no authoritative HT, TVA, TTC, note de débours, or final document formulas. Phase 5 therefore profiles and classifies real orders and calculates safe settlement inputs, but deliberately leaves those unavailable legacy outputs null. They must not be inferred or redesigned without an authoritative legacy reference.
 
+## Financial review and document safety
+
+CashCo preserves four distinct order facts: the immutable source operational status, the system financial decision, the latest manual override, and the resulting final financial decision. Overrides are append-only records in the ignored local runtime database `data/local/financial_override_registry.sqlite3`. Every record captures the reviewer, reason code, timestamp, engine rule, previous decision, and superseded override. An override never changes Admin Earnings and immediately recomputes period counts, restaurant readiness, and reconciliation from the canonical dataset.
+
+Invoice Scope commission is the billing authority when it is present and valid. RST commission remains a validation reference. A difference is exposed as `COMMISSION_MISMATCH`, while the valid Scope rate remains effective; a missing or invalid Scope rate is blocking and CashCo does not silently fall back to RST.
+
+The legacy formula registry records evidence and confidence independently for every required output. No authoritative definitions have been found for the complete commission base, HT, TVA, TTC, note de débours, and final net payable chain. Consequently:
+
+- production financial formulas remain **NOT VALIDATED**;
+- previews are watermarked `DRAFT · NOT VALIDATED`;
+- unknown financial outputs remain null rather than fabricated;
+- document generation does not imply authorization;
+- no Google Drive `files.create` operation is used.
+
+The Documents page provides versioned local JSON previews for invoice, note de débours, and partner statement models. Automatic production publication requires authoritative formula evidence plus a destination that supports safe document creation (for example, an approved Shared Drive or authorized user OAuth workflow).
+
+## CashCo operations dashboard
+
+The shared UI system combines a deep navy navigation frame with CashCo violet actions, restrained coral alerts, soft green positive states, and a light operational canvas. Overview, Settlement, Review Queue, Documents, Partners, Data Sources, Audit, and Admin Control share central design tokens and reusable status components. Dashboard values are real operational adapters for the selected period; formula-gated document stages and unimplemented email/payment stages are never presented as complete. Automation remains `OFF` and period evaluation can progress only as far as financial/document readiness—never authorization or sending.
+
 ## Source discovery boundary
 
-The Data Sources page validates the real service-account connection, checks each active configured Drive location independently, inventories Admin Earnings sources, and maintains a metadata manifest. Overall readiness depends on Google authentication, Admin Earnings, Invoice Scope, RST List, and the required CashCo workspace folders. Finance Tracking has no effect. Settlement evaluation is read-only and in memory; no Google restaurant Sheet, document, email, or payment workflow is enabled.
+The Data Sources page validates the real service-account connection, checks each active configured Drive location independently, inventories Admin Earnings sources, and maintains a metadata manifest. Overall readiness depends on Google authentication, Admin Earnings, Invoice Scope, RST List, and the required CashCo workspace folders. Finance Tracking has no effect. Settlement evaluation is read-only and in memory. Document preview is local and gated; no Google restaurant Sheet, Drive document publication, email, or payment workflow is enabled.
 
 ## Phase 3.1 conflict diagnostics
 

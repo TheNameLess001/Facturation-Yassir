@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     )
     payment_registry_path: Path = Path("data/local/payment_registry.sqlite3")
     period_lock_registry_path: Path = Path("data/local/period_lock_registry.sqlite3")
+    financial_override_registry_path: Path = Path(
+        "data/local/financial_override_registry.sqlite3"
+    )
     processed_data_path: Path = Path("data/processed")
     source_registry_path: Path = Path("data/local/source_registry.sqlite3")
     payment_scope_registry_path: Path = Path(

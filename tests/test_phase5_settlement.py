@@ -240,10 +240,12 @@ def test_commission_scope_precedence_equivalence_and_mismatch() -> None:
     assert equivalent.restaurants[0].commission_rate == Decimal("0.2")
     assert "COMMISSION_MISMATCH" not in equivalent.restaurants[0].issue_codes
     assert mismatch.commission_mismatches == 1
+    assert mismatch.restaurants[0].settlement_status == RestaurantSettlementStatus.READY
     assert (
-        mismatch.restaurants[0].settlement_status
-        == RestaurantSettlementStatus.BLOCKED_COMMISSION
+        mismatch.restaurants[0].commission_resolution.resolution_source
+        == "INVOICE_SCOPE_AUTHORITY"
     )
+    assert mismatch.restaurants[0].commission_rate == Decimal("0.2")
 
 
 def test_missing_scope_commission_blocks_even_when_rst_has_reference() -> None:

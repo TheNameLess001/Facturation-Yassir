@@ -19,12 +19,12 @@ navigation = {
             icon=":material/dashboard:",
             default=True,
         ),
+        st.Page("pages/03_Partners.py", title="Partners", icon=":material/storefront:"),
         st.Page(
             "pages/02_Settlements.py",
-            title="Settlements",
+            title="Settlement",
             icon=":material/receipt_long:",
         ),
-        st.Page("pages/03_Partners.py", title="Partners", icon=":material/storefront:"),
         st.Page(
             "pages/04_Review_Queue.py", title="Review Queue", icon=":material/rule:"
         ),
@@ -33,7 +33,7 @@ navigation = {
         st.Page(
             "pages/05_Documents.py", title="Documents", icon=":material/description:"
         ),
-        st.Page("pages/06_Emails.py", title="Emails", icon=":material/mail:"),
+        st.Page("pages/06_Emails.py", title="Email Center", icon=":material/mail:"),
         st.Page(
             "pages/07_Payments.py", title="Payments", icon=":material/account_balance:"
         ),
