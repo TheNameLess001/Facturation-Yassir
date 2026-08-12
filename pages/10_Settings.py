@@ -7,6 +7,8 @@ from src.config import get_settings
 from src.google.auth import build_google_credentials
 from src.google.drive_service import GoogleDriveService
 from src.google.exceptions import GoogleIntegrationError
+from src.ingestion.conflict_diagnostics_models import ConflictDiagnostics
+from src.ingestion.conflict_diagnostics_runtime import run_conflict_diagnostics
 from src.ingestion.phase2_models import Phase2DiscoveryResult
 from src.ingestion.phase2_runtime import discover_phase2_sources
 from src.ingestion.phase3_runtime import (
@@ -34,6 +36,11 @@ def load_sources() -> Phase2DiscoveryResult:
     return discover_phase2_sources(settings, google_drive_client())
 
 
+@st.cache_data(ttl=3600, show_spinner="Analyzing existing Phase 3 conflicts…")
+def load_conflict_diagnostics() -> ConflictDiagnostics:
+    return run_conflict_diagnostics()
+
+
 def health_tone(health: HealthState) -> str:
     return {
         HealthState.HEALTHY: "success",
@@ -51,6 +58,7 @@ st.caption("Google Drive integration & ingestion readiness · Real metadata")
 if st.button("Refresh Google Drive", type="primary"):
     st.cache_data.clear()
     st.cache_resource.clear()
+    st.session_state["show_conflict_diagnostics"] = False
     st.rerun()
 st.caption("Refresh validates metadata and access only. It never parses order rows or writes to Drive.")
 
@@ -146,6 +154,110 @@ if summary and summary.blocking_issues:
             f"{summary.conflicting_order_ids:,} conflicting Order IDs require REVIEW_QUEUE; "
             f"{summary.invalid_financial_values:,} invalid financial values remain null; "
             f"{summary.missing_order_id_rows:,} rows have missing Order IDs."
+        )
+
+st.markdown('<div class="cc-section">Conflict diagnostics</div>', unsafe_allow_html=True)
+st.caption(
+    "Read-only Phase 3.1 analysis · No conflict is resolved and canonical outputs are not changed."
+)
+if st.button("Analyze Admin Earnings conflicts"):
+    st.session_state["show_conflict_diagnostics"] = True
+if st.session_state.get("show_conflict_diagnostics", False):
+    diagnostics = load_conflict_diagnostics()
+    diagnostic_cards = (
+        ("Conflicting orders", diagnostics.total_conflicting_order_ids),
+        ("Operational only", diagnostics.operational_only),
+        ("Financial", diagnostics.financial_conflicts),
+        ("Identity", diagnostics.identity_conflicts),
+        ("Potential auto", diagnostics.potential_auto_resolvable),
+        ("Manual review", diagnostics.manual_review_required),
+    )
+    for column, (label, value) in zip(st.columns(6), diagnostic_cards, strict=True):
+        column.metric(label, f"{value:,}")
+    st.info(
+        f"Observed source behavior: {diagnostics.source_behavior.value}. "
+        "This is diagnostic evidence only; no reconciliation policy has been applied."
+    )
+
+    fields_col, transitions_col = st.columns(2)
+    with fields_col:
+        st.markdown("#### Conflicting fields")
+        field_frame = pd.DataFrame(
+            [{"Field": item.label, "Orders": item.count} for item in diagnostics.field_counts]
+        )
+        st.bar_chart(field_frame.set_index("Field"), horizontal=True)
+        st.dataframe(field_frame, hide_index=True, width="stretch")
+    with transitions_col:
+        st.markdown("#### Status transitions")
+        transition_frame = pd.DataFrame(
+            [
+                {
+                    "Previous": item.previous_status,
+                    "Later": item.later_status,
+                    "Orders": item.count,
+                }
+                for item in diagnostics.status_transitions[:20]
+            ]
+        )
+        st.dataframe(transition_frame, hide_index=True, width="stretch")
+
+    weeks_col, restaurants_col = st.columns(2)
+    with weeks_col:
+        st.markdown("#### Source week pairs")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Earlier": item.earlier_week,
+                        "Later": item.later_week,
+                        "Conflicts": item.count,
+                    }
+                    for item in diagnostics.week_pairs[:20]
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+    with restaurants_col:
+        st.markdown("#### Restaurant impact")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Restaurant ID": item.restaurant_id,
+                        "Restaurant": item.restaurant_name,
+                        "Conflicts": item.conflicting_order_ids,
+                        "Observed orders": item.total_observed_order_ids,
+                        "Conflict rate": item.conflict_rate,
+                    }
+                    for item in diagnostics.restaurant_impact[:20]
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "Conflict rate": st.column_config.NumberColumn(format="%.2%%")
+            },
+        )
+
+    st.markdown("#### Financial difference diagnostics")
+    st.dataframe(
+        pd.DataFrame(item.model_dump() for item in diagnostics.financial_differences),
+        hide_index=True,
+        width="stretch",
+    )
+    with st.expander("Difference bands and invalid financial patterns"):
+        st.dataframe(
+            pd.DataFrame(item.model_dump() for item in diagnostics.financial_bands),
+            hide_index=True,
+            width="stretch",
+        )
+        st.dataframe(
+            pd.DataFrame(
+                item.model_dump() for item in diagnostics.invalid_financial_patterns
+            ),
+            hide_index=True,
+            width="stretch",
         )
 
 st.markdown('<div class="cc-section">Drive access matrix</div>', unsafe_allow_html=True)

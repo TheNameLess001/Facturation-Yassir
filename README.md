@@ -93,3 +93,18 @@ git diff --check
 ## Phase 2 boundary
 
 The Data Sources page validates the real service-account connection, checks each configured Drive location independently, inventories strictly named Admin Earnings CSV/XLSX files, and maintains a metadata-only manifest. It does not parse source rows, normalize or deduplicate orders, parse Finance/RST content, calculate settlements, generate Google Sheets or documents, send email, or enable automation.
+
+## Phase 3.1 conflict diagnostics
+
+Conflict Diagnostics reads the existing Phase 3 Parquet outputs and performs an aggregate, read-only analysis. Lineage fields, source filenames/weeks, row numbers, and ingestion timestamps are excluded from the Phase 3 material comparison and cannot create a business conflict.
+
+The diagnostic model proposes—but does not apply—these reconciliation candidates:
+
+- formatting-only differences may be auto-resolvable after normalization is explicitly authorized;
+- financial differences no greater than `0.005 MAD` may be precision artifacts, but remain excluded from canonical orders;
+- lifecycle/status changes remain reviewable until source authority is established;
+- any material financial difference above tolerance remains blocking;
+- any Restaurant ID conflict remains blocking;
+- cancellation-reason enrichment may be considered only when identity and financial fields are unchanged.
+
+The current canonical output rules remain exact and unchanged. No Phase 3.1 result is written to Drive. If persistence is later required under the existing-file workaround, manually pre-create `admin_earnings_conflict_diagnostics.json` in Processed before adding an update-only publisher.
