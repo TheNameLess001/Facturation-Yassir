@@ -82,7 +82,7 @@ def test_finance_cannot_authorize_send(tmp_path) -> None:
             AutomationMode.SEND_EMAILS,
             (settlement(),),
             confirmed=True,
-            typed_confirmation="CONFIRM SEND",
+            typed_confirmation="SEND 2026-08-P1",
         )
 
 
@@ -107,7 +107,7 @@ def test_period_authorization_does_not_carry_forward(tmp_path) -> None:
         AutomationMode.SEND_EMAILS,
         (settlement(),),
         confirmed=True,
-        typed_confirmation="CONFIRM SEND",
+        typed_confirmation="SEND 2026-08-P1",
     )
     assert service.mode_for_period("2026-08-P1") == AutomationMode.SEND_EMAILS
     assert service.mode_for_period("2026-08-P2") == AutomationMode.OFF
@@ -122,12 +122,15 @@ def test_authorized_send_is_idempotent(tmp_path) -> None:
         AutomationMode.SEND_EMAILS,
         (current,),
         confirmed=True,
-        typed_confirmation="CONFIRM SEND",
+        typed_confirmation="SEND 2026-08-P1",
     )
     gmail = Mock()
     gmail.send_message.return_value = "provider-1"
     executor = EmailExecutionService(
-        gmail, EmailRegistry(tmp_path / "emails.sqlite3"), authorizations
+        gmail,
+        EmailRegistry(tmp_path / "emails.sqlite3"),
+        authorizations,
+        production_send_enabled=True,
     )
     assert executor.execute(message, current, attachments) == EmailStatus.SENT
     assert executor.execute(message, current, attachments) == EmailStatus.SENT
@@ -147,7 +150,10 @@ def test_create_drafts_never_sends(tmp_path) -> None:
     gmail = Mock()
     gmail.create_draft.return_value = "draft-1"
     executor = EmailExecutionService(
-        gmail, EmailRegistry(tmp_path / "emails.sqlite3"), authorizations
+        gmail,
+        EmailRegistry(tmp_path / "emails.sqlite3"),
+        authorizations,
+        draft_execution_enabled=True,
     )
     assert executor.execute(message, current, attachments) == EmailStatus.AUTHORIZED
     gmail.create_draft.assert_called_once()
@@ -163,12 +169,15 @@ def test_financial_adjustment_after_authorization_is_stale(tmp_path) -> None:
         AutomationMode.SEND_EMAILS,
         (current,),
         confirmed=True,
-        typed_confirmation="CONFIRM SEND",
+        typed_confirmation="SEND 2026-08-P1",
     )
     modified = current.model_copy(update={"net_payable": Decimal(81)})
     gmail = Mock()
     executor = EmailExecutionService(
-        gmail, EmailRegistry(tmp_path / "emails.sqlite3"), authorizations
+        gmail,
+        EmailRegistry(tmp_path / "emails.sqlite3"),
+        authorizations,
+        production_send_enabled=True,
     )
     assert (
         executor.execute(message, modified, attachments)
@@ -187,13 +196,18 @@ def test_failed_email_does_not_stop_or_mark_sent(tmp_path) -> None:
         AutomationMode.SEND_EMAILS,
         (current,),
         confirmed=True,
-        typed_confirmation="CONFIRM SEND",
+        typed_confirmation="SEND 2026-08-P1",
     )
     gmail = Mock()
     gmail.send_message.side_effect = RuntimeError("provider error")
     registry = EmailRegistry(tmp_path / "emails.sqlite3")
     assert (
-        EmailExecutionService(gmail, registry, authorizations).execute(
+        EmailExecutionService(
+            gmail,
+            registry,
+            authorizations,
+            production_send_enabled=True,
+        ).execute(
             message, current, attachments
         )
         == EmailStatus.FAILED
@@ -209,7 +223,11 @@ def test_test_email_uses_internal_recipient_and_does_not_mark_partner_sent(
     gmail.send_message.return_value = "test-1"
     registry = EmailRegistry(tmp_path / "emails.sqlite3")
     executor = EmailExecutionService(
-        gmail, registry, AutomationAuthorizationService(tmp_path / "auth.sqlite3")
+        gmail,
+        registry,
+        AutomationAuthorizationService(tmp_path / "auth.sqlite3"),
+        test_send_enabled=True,
+        allowed_test_recipient="internal@example.com",
     )
     executor.send_test(message, "internal@example.com", attachments)
     args = gmail.send_message.call_args.args

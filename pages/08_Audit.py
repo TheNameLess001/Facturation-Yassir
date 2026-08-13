@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from src.config import get_settings
+from src.emails.workflow_repository import EmailWorkflowRepository
 from src.settlement.overrides import FinancialOverrideRepository
 from src.ui.layout import page_setup, render_kpis
 
@@ -19,6 +20,10 @@ repository = FinancialOverrideRepository(
     get_settings().financial_override_registry_path
 )
 overrides = repository.list_for_period(period_code)
+email_repository = EmailWorkflowRepository(
+    get_settings().email_workflow_registry_path
+)
+email_events = email_repository.list_audit(period_code)
 render_kpis(
     [
         ("Financial Overrides", f"{len(overrides):,}", "Append-only records"),
@@ -33,6 +38,7 @@ render_kpis(
             "History retained",
         ),
         ("Deleted", "0", "No delete operation exists"),
+        ("Email Workflow Events", f"{len(email_events):,}", "Operational metadata only"),
     ]
 )
 st.markdown("### Override history")
@@ -64,4 +70,25 @@ st.info(
     "Source operational status and system decision remain unchanged. The latest valid "
     "override determines the final decision while every prior record remains visible."
 )
+st.markdown("### Email, authorization and period events")
+st.dataframe(
+    pd.DataFrame(
+        [
+            {
+                "Event": item.event_type,
+                "Actor": item.actor_id,
+                "Period": item.period_id,
+                "Restaurant": item.restaurant_id,
+                "At": item.occurred_at,
+                "Entity": item.entity_type,
+                "Entity ID": item.entity_id,
+                "Result": item.details.get("error_code") or item.details.get("mode") or "—",
+            }
+            for item in email_events
+        ]
+    ),
+    hide_index=True,
+    width="stretch",
+)
+st.caption("Email bodies, RIBs, credentials and provider tokens are never audit-logged.")
 st.warning("AUTOMATION OFF · Audit history does not authorize downstream actions")

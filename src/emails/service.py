@@ -49,10 +49,19 @@ class EmailExecutionService:
         gmail: GmailService,
         registry: EmailRegistry,
         authorizations: AutomationAuthorizationService,
+        *,
+        draft_execution_enabled: bool = False,
+        production_send_enabled: bool = False,
+        test_send_enabled: bool = False,
+        allowed_test_recipient: str | None = None,
     ) -> None:
         self.gmail = gmail
         self.registry = registry
         self.authorizations = authorizations
+        self.draft_execution_enabled = draft_execution_enabled
+        self.production_send_enabled = production_send_enabled
+        self.test_send_enabled = test_send_enabled
+        self.allowed_test_recipient = allowed_test_recipient
 
     def execute(
         self,
@@ -82,12 +91,16 @@ class EmailExecutionService:
             raise ValueError("Manual resend requires a reason")
         try:
             if authorization.automation_mode == AutomationMode.CREATE_DRAFTS:
+                if not self.draft_execution_enabled:
+                    return EmailStatus.WAITING_ADMIN_AUTHORIZATION
                 provider_id = self.gmail.create_draft(
                     message.recipient, message.subject, message.body, attachments
                 )
                 status = EmailStatus.AUTHORIZED
                 sent_at = None
             elif authorization.automation_mode == AutomationMode.SEND_EMAILS:
+                if not self.production_send_enabled:
+                    return EmailStatus.WAITING_ADMIN_AUTHORIZATION
                 provider_id = self.gmail.send_message(
                     message.recipient, message.subject, message.body, attachments
                 )
@@ -121,6 +134,10 @@ class EmailExecutionService:
     ) -> str:
         if not internal_recipient:
             raise ValueError("Internal test recipient is required")
+        if not self.test_send_enabled:
+            raise PermissionError("TEST_SEND_DISABLED")
+        if internal_recipient != self.allowed_test_recipient:
+            raise PermissionError("TEST_RECIPIENT_NOT_APPROVED")
         return self.gmail.send_message(
             internal_recipient,
             f"[TEST CASHCO] {message.subject}",

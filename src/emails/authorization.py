@@ -40,8 +40,9 @@ class AutomationAuthorizationService:
             raise ValueError("OFF does not create an authorization")
         if not confirmed:
             raise PermissionError("Explicit Admin confirmation is required")
-        if mode == AutomationMode.SEND_EMAILS and typed_confirmation != "CONFIRM SEND":
-            raise PermissionError("Typed confirmation must match CONFIRM SEND exactly")
+        expected = f"SEND {period_id}"
+        if mode == AutomationMode.SEND_EMAILS and typed_confirmation != expected:
+            raise PermissionError(f"Typed confirmation must match {expected} exactly")
         if any(item.period_id != period_id for item in settlements):
             raise ValueError("Authorization snapshot must contain one period only")
         eligible = tuple(

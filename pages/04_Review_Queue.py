@@ -9,6 +9,7 @@ import streamlit as st
 
 from src.auth import AuthService
 from src.config import get_settings
+from src.emails.workflow_repository import EmailWorkflowRepository
 from src.google.exceptions import GoogleIntegrationError
 from src.models.enums import FinancialDecision
 from src.restaurants.registry_models import (
@@ -132,7 +133,12 @@ def financial_review_dialog(order, restaurant) -> None:
     ):
         user = AuthService(settings).current_user()
         try:
-            FinancialOverrideService(repository).create(
+            FinancialOverrideService(
+                repository,
+                EmailWorkflowRepository(
+                    settings.email_workflow_registry_path
+                ).period_locked,
+            ).create(
                 period_code=restaurant.period_code,
                 restaurant_id=restaurant.restaurant_id,
                 order_id=order.order_id,
@@ -144,7 +150,7 @@ def financial_review_dialog(order, restaurant) -> None:
                 source_engine_version=order.decision_trace.engine_version,
                 source_decision_rule=order.decision_trace.decision_rule,
             )
-        except ValueError as exc:
+        except (ValueError, PermissionError) as exc:
             st.error(str(exc))
         else:
             st.cache_data.clear()

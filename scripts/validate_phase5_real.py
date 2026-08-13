@@ -4,12 +4,13 @@ from datetime import date
 
 from src.config import get_settings
 from src.documents.phase8 import Phase8DocumentEngine
+from src.emails.runtime import build_email_center_snapshot
 from src.google.auth import build_google_credentials
 from src.google.drive_service import GoogleDriveService
 from src.restaurants.registry_runtime import run_restaurant_registry
 from src.settlement.periods import SettlementPeriodService
 from src.settlement.phase5_models import RestaurantSettlementStatus
-from src.settlement.phase5_runtime import load_phase5_processed_inputs
+from src.settlement.phase5_runtime import Phase5Workspace, load_phase5_processed_inputs
 from src.settlement.phase5_service import Phase5SettlementService
 
 
@@ -143,6 +144,21 @@ def main() -> None:
                 "financially_ready_with_orders",
                 result.restaurant_status_count(RestaurantSettlementStatus.READY),
             )
+            email_snapshot = build_email_center_snapshot(
+                Phase5Workspace(summary=result, registry=registry),
+                settings=settings,
+            )
+            print("email_ready", email_snapshot.email_ready)
+            print("missing_email", email_snapshot.missing_email)
+            print("invalid_email", email_snapshot.invalid_email)
+            print("formula_blocked_email", email_snapshot.formula_blocked)
+            print("legal_blocked_email", email_snapshot.legal_blocked)
+            print("admin_authorized", email_snapshot.authorized)
+            print(
+                "production_send_eligible",
+                email_snapshot.production_send_eligible,
+            )
+            print("production_emails_sent", email_snapshot.sent)
     profile = results[0].status_profile
     print("STATUS_PROFILE")
     for item in profile.operational_statuses:

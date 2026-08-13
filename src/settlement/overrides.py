@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -170,8 +171,13 @@ class FinancialOverrideRepository:
 
 
 class FinancialOverrideService:
-    def __init__(self, repository: FinancialOverrideRepository) -> None:
+    def __init__(
+        self,
+        repository: FinancialOverrideRepository,
+        period_locked: Callable[[str], bool] | None = None,
+    ) -> None:
         self.repository = repository
+        self.period_locked = period_locked or (lambda _period_code: False)
 
     def create(
         self,
@@ -188,6 +194,8 @@ class FinancialOverrideService:
         source_decision_rule: str,
         created_at: datetime | None = None,
     ) -> tuple[FinancialOverride, AuditEvent]:
+        if self.period_locked(period_code):
+            raise PermissionError("PERIOD_LOCKED")
         history = self.repository.list_for_order(period_code, order_id)
         latest = history[-1] if history else None
         previous = latest.new_decision if latest else system_decision

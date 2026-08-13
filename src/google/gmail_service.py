@@ -41,6 +41,26 @@ class GoogleGmailService:
         except Exception as exc:
             raise DriveConnectionError("Gmail send failed") from exc
 
+    def get_message_metadata(self, provider_message_id: str) -> dict[str, str]:
+        try:
+            result = (
+                self._api.users()
+                .messages()
+                .get(
+                    userId="me",
+                    id=provider_message_id,
+                    format="metadata",
+                    metadataHeaders=["To", "Subject"],
+                )
+                .execute()
+            )
+            return {
+                "id": str(result.get("id", provider_message_id)),
+                "thread_id": str(result.get("threadId", "")),
+            }
+        except Exception as exc:
+            raise DriveConnectionError("Gmail metadata lookup failed") from exc
+
     @staticmethod
     def _raw(recipient: str, subject: str, body: str, attachments: list[bytes]) -> str:
         message = EmailMessage()

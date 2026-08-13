@@ -144,7 +144,34 @@ The Documents page provides versioned local JSON previews for invoice, note de d
 
 ## CashCo operations dashboard
 
-The shared UI system combines a deep navy navigation frame with CashCo violet actions, restrained coral alerts, soft green positive states, and a light operational canvas. Overview, Settlement, Review Queue, Documents, Partners, Data Sources, Audit, and Admin Control share central design tokens and reusable status components. Dashboard values are real operational adapters for the selected period; formula-gated document stages and unimplemented email/payment stages are never presented as complete. Automation remains `OFF` and period evaluation can progress only as far as financial/document readiness—never authorization or sending.
+The shared UI system combines a deep navy navigation frame with CashCo violet actions, restrained coral alerts, soft green positive states, and a light operational canvas. Overview, Settlement, Review Queue, Documents, Partners, Data Sources, Email Center, Payments, Audit, and Admin Control share central design tokens and reusable status components. Dashboard values are real operational adapters for the selected period; formula-gated document, email, and payment stages are never presented as complete. Automation remains `OFF`, and authorization or delivery cannot occur while the production gates are unresolved.
+
+## Final operational workflow and email safety
+
+The complete operational chain is:
+
+```text
+Invoice Scope
+→ Restaurant Registry
+→ Admin Earnings
+→ Settlement
+→ Financial Review
+→ Documents
+→ Email Center
+→ Admin Authorization
+→ Send
+→ Period Lock
+```
+
+Email automation is period-scoped and every new period defaults to `OFF`. `PREVIEW` creates only an in-memory/local package preview. Draft execution defaults disabled, and production delivery requires both `CASHCO_EMAIL_ALLOW_SEND=true` and `CASHCO_PRODUCTION_EMAIL_SEND_ENABLED=true`; both remain `false` in the example configuration. A Drive service-account credential is not treated as Gmail sending authority. Gmail needs a separately approved OAuth user or Workspace domain-delegation configuration.
+
+Recipient selection is deterministic: `finance_email` takes precedence, then `email`; addresses are normalized and validated, and CC is empty unless a future explicit policy enables it. Packages bind the settlement snapshot, immutable document versions, recipient, subject, body, and attachment set using stable hashes. Admin SEND authorization requires the exact phrase `SEND {period_code}` and applies only to that immutable snapshot. Any material change invalidates it.
+
+Before a provider call, backend policy checks identity, settlement, manual review, commission, financial data, legacy formulas, legal data, production documents, recipient, current Admin authorization, period state, idempotency, and the hard send flag. The send key prevents duplicate delivery across clicks, reruns, retries, and restarts. State becomes `SENDING` before the provider boundary, then `SENT` only after confirmed success; failures remain independently retryable while successful packages are not retried.
+
+Period locking is Admin-only and requires exact typed confirmation. A locked period rejects financial overrides, document mutation, authorization changes, and sending. Controlled reopening requires a reason and `REOPEN {period_code}`, writes an audit event, and invalidates the prior authorization without deleting historical send records.
+
+The current authoritative legacy formulas are still unavailable. Production documents, EMAIL_READY, authorization for SEND, and production delivery therefore remain blocked. Implementation approval is not GO-LIVE approval; production activation requires the separately documented financial, legal, Gmail, dry-run, safety-flag, and explicit human authorization checks.
 
 ## Source discovery boundary
 

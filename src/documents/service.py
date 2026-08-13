@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from src.documents.registry import DocumentRegistry
@@ -52,14 +53,20 @@ class DocumentService:
     TYPES = ("INVOICE", "DISBURSEMENT_NOTE", "STATEMENT")
 
     def __init__(
-        self, registry: DocumentRegistry, renderer: DocumentRenderer | None = None
+        self,
+        registry: DocumentRegistry,
+        renderer: DocumentRenderer | None = None,
+        period_locked: Callable[[str], bool] | None = None,
     ) -> None:
         self.registry = registry
         self.renderer = renderer or DocumentRenderer()
+        self.period_locked = period_locked or (lambda _period_code: False)
 
     def generate(
         self, restaurant: Restaurant, settlement: RestaurantSettlement
     ) -> tuple[tuple[Document, bytes], ...]:
+        if self.period_locked(settlement.period_id):
+            raise PermissionError("PERIOD_LOCKED")
         if settlement.state != WorkflowState.VALIDATED:
             raise PermissionError("Documents require a validated settlement")
         if not restaurant.legal_entity or not restaurant.ice:
@@ -98,6 +105,8 @@ class DocumentService:
         return tuple(result)
 
     def invalidate_if_changed(self, settlement: RestaurantSettlement) -> bool:
+        if self.period_locked(settlement.period_id):
+            raise PermissionError("PERIOD_LOCKED")
         documents = self.registry.list_for_settlement(
             settlement.restaurant_id, settlement.period_id
         )

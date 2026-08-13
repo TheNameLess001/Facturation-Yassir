@@ -8,6 +8,7 @@ import streamlit as st
 
 from src.config import get_settings
 from src.documents.phase8 import Phase8DocumentEngine
+from src.emails.runtime import build_email_center_snapshot
 from src.google.exceptions import GoogleIntegrationError
 from src.settlement.periods import SettlementPeriodService
 from src.settlement.phase5_runtime import load_phase5_workspace
@@ -61,6 +62,7 @@ document_readiness = tuple(
     if item.restaurant_id in registry_by_id
 )
 snapshot = dashboard_snapshot(summary, document_readiness)
+email_snapshot = build_email_center_snapshot(workspace, settings=settings)
 
 st.markdown(f"### {summary.period.display_name} · {snapshot.period_status.value}")
 render_kpis(
@@ -71,6 +73,14 @@ render_kpis(
         ("Orders Evaluated", f"{snapshot.orders_evaluated:,}", "Canonical orders only"),
         ("Manual Review", f"{snapshot.manual_review:,}", f"{snapshot.overrides_applied:,} overrides applied"),
         ("Documents Ready", f"{snapshot.documents_ready:,}", "Legacy formula gate active"),
+    ]
+)
+render_kpis(
+    [
+        ("Email Ready", f"{email_snapshot.email_ready:,}", "Production packages only"),
+        ("Authorized", f"{email_snapshot.authorized:,}", "Snapshot-bound"),
+        ("Sent", f"{email_snapshot.sent:,}", "Provider-confirmed"),
+        ("Failed / Blocked", f"{email_snapshot.failed:,} / {email_snapshot.blocked:,}", "No automatic retry"),
     ]
 )
 
@@ -105,7 +115,22 @@ with progress_column:
         columns=["Stage", "Restaurants"],
     )
     st.bar_chart(progress.set_index("Stage"), color="#23866B", horizontal=True)
-    st.caption("Email Ready remains 0. Email workflow is not implemented.")
+    funnel = pd.DataFrame(
+        [
+            ("Scope", email_snapshot.scope_restaurants),
+            ("Identity", email_snapshot.identity_ready),
+            ("Settlement", email_snapshot.settlement_ready),
+            ("Financial Review Clear", email_snapshot.settlement_ready),
+            ("Documents", email_snapshot.document_ready),
+            ("Email", email_snapshot.email_ready),
+            ("Authorization", email_snapshot.authorized),
+            ("Sent", email_snapshot.sent),
+        ],
+        columns=["Stage", "Restaurants"],
+    )
+    st.markdown("#### Send Readiness Funnel")
+    st.bar_chart(funnel.set_index("Stage"), color="#FF7E73", horizontal=True)
+    st.caption("Later stages remain at zero while their real gates are unresolved.")
 
 st.markdown("### Attention Required")
 render_alerts(
@@ -116,6 +141,8 @@ render_alerts(
         ("Invalid Financial Rows", f"{snapshot.invalid_financial_rows:,}", "coral"),
         ("Missing Legal Data", f"{snapshot.missing_legal_data:,}", "violet"),
         ("Formula Validation Required", f"{snapshot.formula_validation_required:,}", "coral"),
+        ("Missing / Invalid Email", f"{email_snapshot.missing_email + email_snapshot.invalid_email:,}", "coral"),
+        ("Failed Sends", f"{email_snapshot.failed:,}", "coral"),
     ]
 )
 

@@ -76,6 +76,17 @@ class Settings(BaseSettings):
         ),
     )
     test_email_recipient: str | None = None
+    email_default_mode: Literal["OFF", "PREVIEW", "DRAFT", "SEND"] = "OFF"
+    email_allow_drafts: bool = False
+    email_allow_send: bool = False
+    production_email_send_enabled: bool = False
+    gmail_auth_mode: Literal["NOT_CONFIGURED", "OAUTH", "DOMAIN_DELEGATION"] = (
+        "NOT_CONFIGURED"
+    )
+    gmail_sender_email: str | None = None
+    email_workflow_registry_path: Path = Path(
+        "data/local/email_workflow_registry.sqlite3"
+    )
 
     @property
     def google_credentials_configured(self) -> bool:
