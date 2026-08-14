@@ -17,6 +17,7 @@ def test_confirmed_drive_settings_are_centrally_loaded(monkeypatch) -> None:
         "CASHCO_ADMIN_EARNINGS_FOLDER_ID": "admin",
         "CASHCO_RST_LIST_FILE_ID": "rst",
         "CASHCO_INVOICE_SCOPE_FILE_ID": "invoice-scope-file",
+        "CASHCO_PARTNER_LEGAL_MASTER_FILE_ID": "partner-legal-master",
         "CASHCO_CONFIG_FOLDER_ID": "config",
         "CASHCO_PROCESSED_FOLDER_ID": "processed",
         "CASHCO_PARTNERS_FOLDER_ID": "partners",
@@ -27,6 +28,8 @@ def test_confirmed_drive_settings_are_centrally_loaded(monkeypatch) -> None:
         monkeypatch.setenv(name, value)
     settings = Settings(_env_file=None)
     assert settings.invoice_scope_file_id == "invoice-scope-file"
+    assert settings.partner_legal_master_file_id == "partner-legal-master"
+    assert settings.partner_legal_master_worksheet == "PARTNERS"
     assert settings.config_folder_id == "config"
     assert settings.drive_sources_configured is True
 

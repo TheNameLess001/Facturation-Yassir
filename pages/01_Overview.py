@@ -20,7 +20,7 @@ from src.ui.dashboard_data import (
 from src.ui.layout import page_setup, render_alerts, render_kpis
 
 
-@st.cache_data(ttl=900, show_spinner="Loading real CashCo operations…")
+@st.cache_data(ttl=300, show_spinner="Loading real CashCo operations…")
 def load_overview(period_code: str):
     return load_phase5_workspace(period_code)
 
@@ -73,6 +73,36 @@ render_kpis(
         ("Orders Evaluated", f"{snapshot.orders_evaluated:,}", "Canonical orders only"),
         ("Manual Review", f"{snapshot.manual_review:,}", f"{snapshot.overrides_applied:,} overrides applied"),
         ("Documents Ready", f"{snapshot.documents_ready:,}", "Non-formula gates applied"),
+    ]
+)
+identity_ready_registry = workspace.registry.identity_ready_restaurants
+legal_enriched = sum(
+    any(value.source == "PARTNER_LEGAL_MASTER" for value in item.field_lineage.values())
+    for item in identity_ready_registry
+)
+render_kpis(
+    [
+        ("Legal Profiles Enriched", f"{legal_enriched:,}", "Partner Legal Master"),
+        (
+            "Raison Sociale Coverage",
+            f"{sum(bool(item.legal_entity) for item in identity_ready_registry):,}",
+            f"of {len(identity_ready_registry):,}",
+        ),
+        (
+            "ICE Coverage",
+            f"{sum(bool(item.ice) for item in identity_ready_registry):,}",
+            "Optional document field",
+        ),
+        (
+            "RIB Coverage",
+            f"{sum(bool(item.rib) for item in identity_ready_registry):,}",
+            "Masked payment data",
+        ),
+        (
+            "Payment Ready",
+            f"{sum(item.readiness.payment_ready for item in identity_ready_registry):,}",
+            "Independent of documents",
+        ),
     ]
 )
 render_kpis(

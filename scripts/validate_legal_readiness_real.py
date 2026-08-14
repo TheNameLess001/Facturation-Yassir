@@ -116,7 +116,7 @@ def main() -> None:
         "restaurant_name_fallback",
         sum(
             results[0].document_partner_name_source
-            == DocumentPartnerNameSource.RESTAURANT_NAME_FALLBACK
+            != DocumentPartnerNameSource.LEGAL_ENTITY
             for results in legal_by_restaurant.values()
         ),
     )

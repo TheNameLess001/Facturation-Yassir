@@ -23,8 +23,10 @@ from src.restaurants.registry_models import (
     CorrectionConfidence,
     DataQualityStatus,
     InvoiceScopeSchemaProfile,
+    LegalFieldLineage,
     MappingReviewCase,
     MappingStatus,
+    PaymentReadinessStatus,
     RegisteredRestaurant,
     RegistryIssue,
     RegistryIssueSeverity,
@@ -593,6 +595,17 @@ class RestaurantRegistryBuilder:
             field_sources[field] = (
                 f"INVOICE_SCOPE:{column}:row_{source.get('source_row')}"
             )
+        field_lineage = {
+            field: LegalFieldLineage(
+                source=value.split(":", 1)[0],
+                source_field=value.split(":")[1],
+                source_row=(
+                    int(value.rsplit("row_", 1)[1]) if "row_" in value else None
+                ),
+                source_version="CURRENT_RUNTIME",
+            )
+            for field, value in field_sources.items()
+        }
         return RegisteredRestaurant(
             restaurant_id=restaurant_id,
             restaurant_name=chosen.get("restaurant_name") or source["restaurant_name"],
@@ -628,6 +641,12 @@ class RestaurantRegistryBuilder:
             admin_restaurant_name=order_names.get(str(restaurant_id)),
             issue_codes=issue_codes,
             field_sources=field_sources,
+            field_lineage=field_lineage,
+            payment_readiness_status=(
+                PaymentReadinessStatus.PAYMENT_READY
+                if chosen.get("rib")
+                else PaymentReadinessStatus.RIB_MISSING
+            ),
             readiness=RestaurantReadiness(
                 identity_ready=identity_ready,
                 orders_available=count > 0,

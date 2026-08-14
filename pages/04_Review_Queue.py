@@ -19,7 +19,10 @@ from src.restaurants.registry_models import (
     NoIdClassification,
     RegisteredRestaurant,
 )
-from src.restaurants.registry_runtime import run_restaurant_registry
+from src.restaurants.registry_runtime import (
+    expire_partner_legal_master_cache,
+    run_restaurant_registry,
+)
 from src.settlement.overrides import (
     FinancialOverrideRepository,
     FinancialOverrideService,
@@ -39,12 +42,12 @@ IDENTITY_BLOCKER_STATUSES = frozenset(
 )
 
 
-@st.cache_data(ttl=900, show_spinner="Building the identity blocker workspace…")
+@st.cache_data(ttl=300, show_spinner="Building the identity blocker workspace…")
 def load_registry():
     return run_restaurant_registry()
 
 
-@st.cache_data(ttl=900, show_spinner="Building the financial review queue…")
+@st.cache_data(ttl=300, show_spinner="Building the financial review queue…")
 def load_financial_review(period_code: str):
     return load_phase5_workspace(period_code)
 
@@ -491,6 +494,7 @@ with header:
     )
 with action:
     if st.button("Refresh Google Sources", type="primary"):
+        expire_partner_legal_master_cache()
         st.cache_data.clear()
         st.cache_resource.clear()
         st.session_state.pop("financial_review_period", None)
@@ -502,10 +506,121 @@ review_area = st.segmented_control(
         "IDENTITY REVIEW",
         "FINANCIAL REVIEW",
         "COMMISSION REVIEW",
+        "LEGAL MASTER",
         "DATA ISSUES",
     ],
     default="IDENTITY REVIEW",
 )
+if review_area == "LEGAL MASTER":
+    try:
+        legal_registry = load_registry()
+    except (GoogleIntegrationError, ValueError, OSError) as exc:
+        st.error(f"Partner Legal Master review is unavailable: {exc}")
+        st.stop()
+    snapshot = legal_registry.partner_legal_master
+    if not snapshot or not snapshot.profile:
+        st.error("Partner Legal Master has no successful synchronized snapshot.")
+        st.stop()
+    profile = snapshot.profile
+    render_kpis(
+        [
+            ("Rows", f"{profile.row_count:,}", snapshot.status.value),
+            ("Missing ID", f"{profile.missing_ids:,}", "Human source correction"),
+            ("Duplicate IDs", f"{profile.duplicate_id_groups:,}", "Never selected arbitrarily"),
+            ("Legal conflicts", f"{profile.conflict_groups:,}", "Not applied to registry"),
+            ("Name mismatch", f"{profile.name_mismatches:,}", "Exact ID review"),
+            ("RST matches", f"{profile.matched_rst:,}", "Exact Restaurant ID"),
+        ]
+    )
+    issue_filters = st.columns(5)
+    city_filter = issue_filters[0].selectbox(
+        "City",
+        [
+            "All",
+            *sorted(
+                {
+                    item.city
+                    for item in legal_registry.restaurants
+                    if item.city
+                },
+                key=str.casefold,
+            ),
+        ],
+    )
+    restaurant_filter = issue_filters[1].text_input("Restaurant")
+    issue_filter = issue_filters[2].selectbox(
+        "Issue", ["All", *sorted({item.code for item in snapshot.issues})]
+    )
+    review_filter = issue_filters[3].selectbox(
+        "Review Status",
+        [
+            "All",
+            *sorted(
+                {
+                    item.review_status
+                    for item in snapshot.issues
+                    if item.review_status
+                }
+            ),
+        ],
+    )
+    issue_filters[4].selectbox(
+        "Document Type", ["All", "INVOICE", "NOTE_DE_DEBOURS", "PARTNER_STATEMENT"]
+    )
+    restaurant_by_id = {
+        item.restaurant_id: item
+        for item in legal_registry.restaurants
+        if item.restaurant_id
+    }
+    legal_issues = list(snapshot.issues)
+    if city_filter != "All":
+        legal_issues = [
+            item
+            for item in legal_issues
+            if restaurant_by_id.get(item.restaurant_id)
+            and restaurant_by_id[item.restaurant_id].city == city_filter
+        ]
+    if restaurant_filter:
+        needle = restaurant_filter.casefold().strip()
+        legal_issues = [
+            item
+            for item in legal_issues
+            if needle in (item.restaurant_name or "").casefold()
+            or needle in (item.restaurant_id or "").casefold()
+        ]
+    if issue_filter != "All":
+        legal_issues = [item for item in legal_issues if item.code == issue_filter]
+    if review_filter != "All":
+        legal_issues = [
+            item for item in legal_issues if item.review_status == review_filter
+        ]
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Restaurant": item.restaurant_name,
+                    "Restaurant ID": item.restaurant_id,
+                    "City": (
+                        restaurant_by_id[item.restaurant_id].city
+                        if item.restaurant_id in restaurant_by_id
+                        else None
+                    ),
+                    "Issue": item.code,
+                    "Review Status": item.review_status,
+                    "Source Rows": ", ".join(map(str, item.source_rows)),
+                    "Conflicting Fields": ", ".join(item.fields),
+                }
+                for item in legal_issues
+            ]
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+    st.caption(
+        "Read-only diagnostics. Full RIB values and legal identifiers are never shown in this table."
+    )
+    st.warning("AUTOMATION OFF · No source correction is applied by CashCo")
+    st.stop()
 if review_area != "IDENTITY REVIEW":
     render_financial_review(review_area)
     st.info(

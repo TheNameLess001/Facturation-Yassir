@@ -147,7 +147,7 @@ def test_legal_entity_precedence_and_restaurant_name_fallback_are_traced() -> No
     assert fallback.document_partner_name == "Restaurant One"
     assert (
         fallback.document_partner_name_source
-        == DocumentPartnerNameSource.RESTAURANT_NAME_FALLBACK
+        == DocumentPartnerNameSource.RST_RESTAURANT_NAME
     )
     assert fallback.status == DocumentLegalStatus.READY_WITH_WARNINGS
 

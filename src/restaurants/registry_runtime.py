@@ -12,18 +12,33 @@ from src.google.drive_service import GoogleDriveService
 from src.google.exceptions import SourceDiscoveryError
 from src.google.interfaces import ReadOnlyDriveService
 from src.ingestion.admin_earnings_normalizer import normalize_identifier
-from src.restaurants.registry_models import RestaurantRegistryResult
-from src.restaurants.scope_registry import RestaurantRegistryBuilder
+from src.restaurants.legal_master import (
+    PartnerLegalMasterCache,
+    PartnerLegalMasterSource,
+    PartnerLegalRegistryEnricher,
+)
+from src.restaurants.registry_models import (
+    LegalMasterSyncStatus,
+    PartnerLegalMasterSnapshot,
+    RestaurantRegistryResult,
+)
+from src.restaurants.scope_registry import (
+    RST_ALIASES,
+    RestaurantRegistryBuilder,
+    resolve_columns,
+)
 from src.restaurants.source_reader import RestaurantSourceReader
 
 LOGGER = logging.getLogger(__name__)
 CANONICAL_ORDERS_NAME = "canonical_orders.parquet"
+LEGAL_MASTER_CACHE = PartnerLegalMasterCache()
 
 
 def run_restaurant_registry(
     settings: Settings | None = None,
     drive: ReadOnlyDriveService | None = None,
     canonical_orders_frame: pd.DataFrame | None = None,
+    force_legal_master_refresh: bool = False,
 ) -> RestaurantRegistryResult:
     settings = settings or get_settings()
     if not settings.invoice_scope_file_id:
@@ -52,15 +67,78 @@ def run_restaurant_registry(
         canonical_order_counts=order_counts,
         canonical_order_names=order_names,
     )
+    legal_snapshot = load_partner_legal_master(
+        settings,
+        active_drive,
+        force=force_legal_master_refresh,
+    )
+    rst_mapping = resolve_columns(
+        rst.frame.columns,
+        RST_ALIASES,
+        settings.rst_column_map,
+    )
+    rst_id_column = rst_mapping.get("restaurant_id")
+    rst_ids = (
+        {
+            normalized
+            for value in rst.frame[rst_id_column]
+            if (normalized := normalize_identifier(value)) is not None
+        }
+        if rst_id_column
+        else set()
+    )
+    result = PartnerLegalRegistryEnricher().enrich(
+        result,
+        legal_snapshot,
+        rst_ids=rst_ids,
+    )
     LOGGER.info(
         "restaurant_registry_built",
         extra={
             "scope_rows": result.scope_rows,
             "registered": len(result.restaurants),
             "blocking": sum(item.severity == "BLOCKING" for item in result.issues),
+            "legal_master_status": legal_snapshot.status.value,
+            "legal_master_rows": (
+                legal_snapshot.profile.row_count if legal_snapshot.profile else 0
+            ),
         },
     )
     return result
+
+
+def load_partner_legal_master(
+    settings: Settings,
+    drive: ReadOnlyDriveService,
+    *,
+    force: bool = False,
+) -> PartnerLegalMasterSnapshot:
+    if not settings.partner_legal_master_file_id:
+        return PartnerLegalMasterSnapshot(status=LegalMasterSyncStatus.NOT_CONFIGURED)
+    key = (
+        f"{settings.partner_legal_master_file_id}:"
+        f"{settings.partner_legal_master_worksheet}"
+    )
+    source = PartnerLegalMasterSource(drive)
+    return LEGAL_MASTER_CACHE.load(
+        key,
+        lambda: source.fetch(
+            settings.partner_legal_master_file_id or "",
+            settings.partner_legal_master_worksheet,
+            column_map=settings.partner_legal_master_column_map,
+        ),
+        ttl_seconds=settings.partner_legal_master_cache_ttl_seconds,
+        force=force,
+    )
+
+
+def expire_partner_legal_master_cache(settings: Settings | None = None) -> None:
+    active = settings or get_settings()
+    if active.partner_legal_master_file_id:
+        LEGAL_MASTER_CACHE.expire(
+            f"{active.partner_legal_master_file_id}:"
+            f"{active.partner_legal_master_worksheet}"
+        )
 
 
 def _load_canonical_order_diagnostics(

@@ -202,6 +202,23 @@ The production document validator builds immutable, versioned candidates for `IN
 
 Validated candidates are generated in memory/local preview only. Automatic Drive publishing remains `DRIVE_PUBLISHING_NOT_CONFIGURED`; no `files.create` probe or source mutation is performed. Email package readiness may become true independently of Gmail capability, while automation and production SEND remain disabled.
 
+## Partner Legal Master — live legal and payment enrichment
+
+The human-maintained Google Sheet configured by `CASHCO_PARTNER_LEGAL_MASTER_FILE_ID` is an active, read-only source. CashCo selects worksheet `PARTNERS` by name; worksheet GIDs and helper formulas are not business contracts. The team may maintain legal and payment information there without a code deployment.
+
+Active source ownership is explicit:
+
+- Invoice Scope defines CashCo membership and the authoritative commission.
+- RST defines operational restaurant identity, name, address, city, operational email, phone, and metadata.
+- Partner Legal Master enriches Raison Sociale, ICE, IF, RC, legal address/city, Finance Email, Finance Contact, RIB, and bank by exact Restaurant ID only.
+- Admin Earnings remains the transactional order truth.
+
+The resulting flow is `Invoice Scope + RST + Partner Legal Master + Admin Earnings → Canonical Partner Registry → Settlement → Documents → Email Readiness`. Legal values are never fuzzy-matched or borrowed from a similar restaurant. Duplicate IDs, conflicts, unknown IDs, missing IDs, and material name mismatches remain visible in the Legal Master review queue and unsafe rows are not applied.
+
+The source uses a five-minute process cache and a normalized content fingerprint covering business-relevant values. Manual **Refresh Google Sources** expires the cache and fetches the source again. A temporary Google failure retains the last successful registry as `STALE_SOURCE`; it does not erase legal data or convert every partner into a blocker. Synchronization audit events contain only counts, timestamps, and fingerprints—never full RIBs or legal identifiers.
+
+CashCo independently calculates document, email, and payment readiness from raw fields. Google helper columns such as Data Status, Payment Status, Legal Completeness %, and RIB Status are deliberately ignored as backend truth. RIB remains masked and payment-specific; it never blocks commission invoices, notes de débours, or statements. Any change to legal document content or Finance Email changes immutable document/package hashes and therefore invalidates a future snapshot-bound authorization.
+
 ## Source discovery boundary
 
 The Data Sources page validates the real service-account connection, checks each active configured Drive location independently, inventories Admin Earnings sources, and maintains a metadata manifest. Overall readiness depends on Google authentication, Admin Earnings, Invoice Scope, RST List, and the required CashCo workspace folders. Finance Tracking has no effect. Settlement evaluation is read-only and in memory. Document preview is local and gated; no Google restaurant Sheet, Drive document publication, email, or payment workflow is enabled.

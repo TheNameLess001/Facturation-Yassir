@@ -34,6 +34,7 @@ def _unavailable_result(
             google_connection=health_state,
             admin_earnings=health_state,
             invoice_scope=health_state,
+            partner_legal_master=health_state,
             rst_list=health_state,
             workspace=health_state,
             overall=readiness,

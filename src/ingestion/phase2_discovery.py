@@ -71,14 +71,25 @@ class Phase2SourceDiscoveryService:
 
         rst_access = self._by_location(access, "RST List")
         invoice_scope_access = self._by_location(access, "Invoice Scope")
+        legal_master_access = self._by_location(access, "Partner Legal Master")
         rst = rst_access.object if self._supported_file(rst_access) else None
         invoice_scope = (
             invoice_scope_access.object
             if self._supported_file(invoice_scope_access)
             else None
         )
+        partner_legal_master = (
+            legal_master_access.object
+            if self._supported_file(legal_master_access)
+            else None
+        )
         health = self._health(
-            access, valid, missing_count, rst is not None, invoice_scope is not None
+            access,
+            valid,
+            missing_count,
+            rst is not None,
+            invoice_scope is not None,
+            partner_legal_master is not None,
         )
         return Phase2DiscoveryResult(
             connection_state=ConnectionState.CONNECTED,
@@ -87,6 +98,7 @@ class Phase2SourceDiscoveryService:
             missing_admin_files=missing_count,
             rst_list=rst,
             invoice_scope=invoice_scope,
+            partner_legal_master=partner_legal_master,
             access=access,
             health=health,
             last_checked_at=checked_at,
@@ -96,6 +108,12 @@ class Phase2SourceDiscoveryService:
         locations = (
             ("Admin Earnings", self.settings.admin_earnings_folder_id, True, False),
             ("Invoice Scope", self.settings.invoice_scope_file_id, False, False),
+            (
+                "Partner Legal Master",
+                self.settings.partner_legal_master_file_id,
+                False,
+                False,
+            ),
             ("RST List", self.settings.rst_list_file_id, False, False),
             ("Config", self.settings.config_folder_id, True, True),
             ("Processed", self.settings.processed_folder_id, True, True),
@@ -183,7 +201,14 @@ class Phase2SourceDiscoveryService:
         return next(item for item in access if item.location == location)
 
     @staticmethod
-    def _health(access, valid, missing_count, rst_ok, invoice_scope_ok) -> SourceHealth:
+    def _health(
+        access,
+        valid,
+        missing_count,
+        rst_ok,
+        invoice_scope_ok,
+        partner_legal_master_ok,
+    ) -> SourceHealth:
         admin_access = next(x for x in access if x.location == "Admin Earnings")
         workspace_items = [x for x in access if x.location in {"Config", "Processed", "Partners", "Documents", "Audit"}]
         admin = HealthState.BLOCKING if not admin_access.readable or not valid else (HealthState.WARNING if missing_count else HealthState.HEALTHY)
@@ -191,13 +216,19 @@ class Phase2SourceDiscoveryService:
         invoice_scope = (
             HealthState.HEALTHY if invoice_scope_ok else HealthState.BLOCKING
         )
+        partner_legal_master = (
+            HealthState.HEALTHY
+            if partner_legal_master_ok
+            else HealthState.BLOCKING
+        )
         workspace = HealthState.HEALTHY if all(x.access == AccessLevel.READ_WRITE for x in workspace_items) else HealthState.BLOCKING
-        states = (admin, invoice_scope, rst, workspace)
+        states = (admin, invoice_scope, partner_legal_master, rst, workspace)
         overall = ReadinessState.READY_FOR_INGESTION if all(x == HealthState.HEALTHY for x in states) else ReadinessState.BLOCKING
         return SourceHealth(
             google_connection=HealthState.HEALTHY,
             admin_earnings=admin,
             invoice_scope=invoice_scope,
+            partner_legal_master=partner_legal_master,
             rst_list=rst,
             workspace=workspace,
             overall=overall,

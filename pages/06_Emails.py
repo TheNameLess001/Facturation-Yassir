@@ -14,7 +14,7 @@ from src.settlement.periods import SettlementPeriodService
 from src.ui.layout import page_setup, render_alerts, render_kpis
 
 
-@st.cache_data(ttl=900, show_spinner="Building safe email readiness…")
+@st.cache_data(ttl=300, show_spinner="Building safe email readiness…")
 def load_snapshot(period_code: str):
     return load_email_center_snapshot(period_code)
 

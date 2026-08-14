@@ -44,6 +44,12 @@ class Phase2Drive:
                 mime_type="application/vnd.google-apps.spreadsheet",
                 modified_time=datetime(2026, 8, 12, tzinfo=UTC),
             ),
+            "legal-master": DriveFile(
+                file_id="legal-master",
+                name="Partner Legal Master",
+                mime_type="application/vnd.google-apps.spreadsheet",
+                modified_time=datetime(2026, 8, 12, tzinfo=UTC),
+            ),
         }
 
     def list_files(self, folder_id):
@@ -75,6 +81,7 @@ def configured_settings(tmp_path) -> Settings:
         admin_earnings_folder_id="admin",
         rst_list_file_id="rst",
         invoice_scope_file_id="invoice",
+        partner_legal_master_file_id="legal-master",
         config_folder_id="config",
         processed_folder_id="processed",
         partners_folder_id="partners",

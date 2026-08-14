@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     invoice_scope_file_id: str | None = None
     invoice_scope_worksheet: str = "CASH-CO"
     invoice_scope_column_map: dict[str, str] = Field(default_factory=dict)
+    partner_legal_master_file_id: str | None = (
+        "1oHvDXkKdqOIiw8JVknoO65dkAw3p2NaD209l3jkPuAQ"
+    )
+    partner_legal_master_worksheet: str = "PARTNERS"
+    partner_legal_master_column_map: dict[str, str] = Field(default_factory=dict)
+    partner_legal_master_cache_ttl_seconds: int = Field(default=300, ge=60, le=3600)
     # LEGACY / DEPRECATED / NOT USED. Permanent corrections belong in Invoice Scope.
     invoice_scope_alias_map: dict[str, str] = Field(default_factory=dict)
     # LEGACY / DEPRECATED / NOT USED by active CashCo V2 runtime. These fields
@@ -102,6 +108,7 @@ class Settings(BaseSettings):
         required_ids = (
             self.admin_earnings_folder_id,
             self.invoice_scope_file_id,
+            self.partner_legal_master_file_id,
             self.rst_list_file_id,
             self.config_folder_id,
             self.processed_folder_id,

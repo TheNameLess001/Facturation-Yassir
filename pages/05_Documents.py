@@ -18,6 +18,7 @@ from src.documents.phase8 import (
     Phase8DocumentEngine,
 )
 from src.google.exceptions import GoogleIntegrationError
+from src.restaurants.legal_master import PartnerLegalMasterSource
 from src.settlement.legacy_validation import LegacyFormulaRegistry
 from src.settlement.periods import SettlementPeriodService
 from src.settlement.phase5_runtime import load_phase5_workspace
@@ -28,7 +29,7 @@ from src.settlement.reference_import import (
 from src.ui.layout import page_setup, render_kpis
 
 
-@st.cache_data(ttl=900, show_spinner="Preparing document readiness…")
+@st.cache_data(ttl=300, show_spinner="Preparing document readiness…")
 def load_document_workspace(period_code: str):
     return load_phase5_workspace(period_code)
 
@@ -98,6 +99,15 @@ def legal_review_dialog(restaurant, settlement) -> None:
     st.markdown(f"### {restaurant.restaurant_name or restaurant.restaurant_id}")
     st.caption(
         f"{restaurant.restaurant_id} · Canonical identity · Read-only source diagnostics"
+    )
+    st.write(
+        {
+            "Legal Master Review": restaurant.legal_master_review_status,
+            "Finance Email": restaurant.finance_email or "RST email fallback",
+            "RIB Status": restaurant.payment_readiness_status.value,
+            "Masked RIB": PartnerLegalMasterSource.mask_rib(restaurant.rib),
+            "Payment Ready": restaurant.readiness.payment_ready,
+        }
     )
     for result in results:
         st.markdown(f"#### {result.document_type.value} · {result.status.value}")

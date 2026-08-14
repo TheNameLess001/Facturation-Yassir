@@ -70,6 +70,136 @@ class NoIdClassification(StrEnum):
     OTHER = "OTHER"
 
 
+class LegalMasterSyncStatus(StrEnum):
+    CONNECTED = "CONNECTED"
+    STALE_SOURCE = "STALE_SOURCE"
+    FAILED = "FAILED"
+    NOT_CONFIGURED = "NOT_CONFIGURED"
+
+
+class LegalMasterRecordStatus(StrEnum):
+    MATCHED_BY_ID = "MATCHED_BY_ID"
+    ID_NOT_IN_RST = "ID_NOT_IN_RST"
+    MISSING_ID = "MISSING_ID"
+    DUPLICATE_ID = "DUPLICATE_ID"
+    NAME_MISMATCH = "NAME_MISMATCH"
+    CONFLICT = "CONFLICT"
+
+
+class LegalValueStatus(StrEnum):
+    VALID = "VALID"
+    MISSING = "MISSING"
+    INVALID = "INVALID"
+
+
+class RibValueStatus(StrEnum):
+    VALID_FORMAT = "VALID_FORMAT"
+    MISSING = "MISSING"
+    INVALID_FORMAT = "INVALID_FORMAT"
+
+
+class PaymentReadinessStatus(StrEnum):
+    PAYMENT_READY = "PAYMENT_READY"
+    RIB_MISSING = "RIB_MISSING"
+    RIB_INVALID = "RIB_INVALID"
+    PAYMENT_DATA_REVIEW = "PAYMENT_DATA_REVIEW"
+
+
+class LegalFieldLineage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source: str
+    source_field: str
+    source_row: int | None = None
+    source_version: str
+
+
+class PartnerLegalRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    restaurant_id: str | None = None
+    restaurant_name: str | None = None
+    raison_sociale: str | None = None
+    ice: str | None = None
+    if_number: str | None = None
+    rc: str | None = None
+    address: str | None = None
+    city: str | None = None
+    email: str | None = None
+    finance_email: str | None = None
+    phone: str | None = None
+    finance_contact: str | None = None
+    rib: str | None = None
+    bank: str | None = None
+    review_status: str | None = None
+    comment: str | None = None
+    source_version: str
+    source_row: int
+    ice_status: LegalValueStatus
+    rib_status: RibValueStatus
+    finance_email_status: LegalValueStatus
+
+
+class PartnerLegalIssue(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+    restaurant_id: str | None = None
+    restaurant_name: str | None = None
+    source_rows: tuple[int, ...] = ()
+    fields: tuple[str, ...] = ()
+    review_status: str | None = None
+
+
+class PartnerLegalMasterProfile(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    file_id: str
+    filename: str
+    mime_type: str
+    worksheet_names: tuple[str, ...]
+    selected_worksheet: str
+    modified_at: datetime
+    capabilities: dict[str, bool] = Field(default_factory=dict)
+    row_count: int
+    column_count: int
+    columns: tuple[str, ...]
+    unique_restaurant_ids: int
+    missing_ids: int
+    duplicate_id_groups: int
+    conflict_groups: int
+    matched_invoice_scope: int = 0
+    matched_rst: int = 0
+    name_mismatches: int = 0
+
+
+class LegalMasterAuditEvent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    event_type: str
+    occurred_at: datetime
+    fingerprint: str | None = None
+    rows: int = 0
+    matched_ids: int = 0
+    conflicts: int = 0
+    affected_readiness_count: int = 0
+
+
+class PartnerLegalMasterSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: LegalMasterSyncStatus
+    profile: PartnerLegalMasterProfile | None = None
+    records: tuple[PartnerLegalRecord, ...] = ()
+    issues: tuple[PartnerLegalIssue, ...] = ()
+    fingerprint: str | None = None
+    source_version: str | None = None
+    synced_at: datetime | None = None
+    last_successful_sync: datetime | None = None
+    stale_reason: str | None = None
+    audit_events: tuple[LegalMasterAuditEvent, ...] = ()
+
+
 class WorksheetSchemaProfile(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -243,6 +373,12 @@ class RegisteredRestaurant(BaseModel):
     admin_restaurant_name: str | None = None
     issue_codes: tuple[str, ...] = ()
     field_sources: dict[str, str] = Field(default_factory=dict)
+    field_lineage: dict[str, LegalFieldLineage] = Field(default_factory=dict)
+    legal_master_review_status: str | None = None
+    finance_contact: str | None = None
+    payment_readiness_status: PaymentReadinessStatus = (
+        PaymentReadinessStatus.RIB_MISSING
+    )
     readiness: RestaurantReadiness
 
 
@@ -258,6 +394,7 @@ class RestaurantRegistryResult(BaseModel):
     restaurants: tuple[RegisteredRestaurant, ...]
     issues: tuple[RegistryIssue, ...]
     mapping_cases: tuple[MappingReviewCase, ...] = ()
+    partner_legal_master: PartnerLegalMasterSnapshot | None = None
 
     def mapping_count(self, status: MappingStatus) -> int:
         return sum(item.mapping_status == status for item in self.restaurants)

@@ -6,11 +6,14 @@ import streamlit as st
 from src.documents.legal_readiness import DocumentLegalPolicy, DocumentLegalStatus
 from src.google.exceptions import GoogleIntegrationError
 from src.restaurants.registry_models import MappingStatus, RegisteredRestaurant
-from src.restaurants.registry_runtime import run_restaurant_registry
+from src.restaurants.registry_runtime import (
+    expire_partner_legal_master_cache,
+    run_restaurant_registry,
+)
 from src.ui.layout import page_setup, render_kpis
 
 
-@st.cache_data(ttl=900, show_spinner="Building the real Restaurant Registry…")
+@st.cache_data(ttl=300, show_spinner="Building the real Restaurant Registry…")
 def load_registry():
     return run_restaurant_registry()
 
@@ -65,6 +68,7 @@ def restaurant_dialog(restaurant: RegisteredRestaurant) -> None:
                 "Documents": legal_status.value,
                 "Email": "READY" if restaurant.readiness.email_ready else "MISSING",
                 "Payment": "READY" if restaurant.readiness.payment_ready else "MISSING RIB",
+                "Payment Status": restaurant.payment_readiness_status.value,
             }
         )
     with identity:
@@ -97,6 +101,7 @@ def restaurant_dialog(restaurant: RegisteredRestaurant) -> None:
                 "Email": restaurant.email,
                 "Finance Email": restaurant.finance_email,
                 "Phone": restaurant.phone,
+                "Finance Contact": restaurant.finance_contact,
             }
         )
     with sources:
@@ -106,6 +111,11 @@ def restaurant_dialog(restaurant: RegisteredRestaurant) -> None:
                 "RST reference": restaurant.rst_source_reference,
                 "Mapping method": restaurant.mapping_method,
                 "Field sources": restaurant.field_sources,
+                "Legal Master review": restaurant.legal_master_review_status,
+                "Legal field lineage": {
+                    field: value.model_dump()
+                    for field, value in restaurant.field_lineage.items()
+                },
             }
         )
     with orders:
@@ -126,9 +136,12 @@ page_setup("Restaurant Registry")
 header, action = st.columns([4, 1])
 with header:
     st.title("Restaurant Registry")
-    st.caption("Invoice Scope eligibility · RST identity & enrichment · Real production data")
+    st.caption(
+        "Invoice Scope eligibility · RST operational identity · Partner Legal Master enrichment"
+    )
 with action:
     if st.button("Refresh Google Sources", type="primary"):
+        expire_partner_legal_master_cache()
         st.cache_data.clear()
         st.cache_resource.clear()
         st.rerun()
@@ -170,7 +183,11 @@ render_kpis(
         ("With Orders", f"{sum(item.admin_orders_available for item in restaurants):,}", "Canonical Admin diagnostics"),
         ("Without Orders", f"{sum(not item.admin_orders_available for item in restaurants):,}", "Still remains in Invoice Scope"),
         ("Missing Email", f"{registry.issue_count('MISSING_EMAIL'):,}", "Future EMAIL_READY issue"),
-        ("Missing RIB", f"{registry.issue_count('MISSING_RIB'):,}", "Future payment issue"),
+        (
+            "Payment Ready",
+            f"{sum(item.readiness.payment_ready for item in restaurants):,}",
+            "Validated Partner Legal Master RIB",
+        ),
         (
             "Legal Blocked",
             f"{sum(item == DocumentLegalStatus.BLOCKED for item in legal_statuses.values()):,}",
@@ -258,6 +275,14 @@ table = pd.DataFrame(
         {
             "Restaurant": item.restaurant_name,
             "Restaurant ID": item.restaurant_id,
+            "Raison Sociale": item.legal_entity,
+            "Partner Name Source": (
+                "LEGAL_ENTITY"
+                if item.legal_entity
+                else item.field_lineage.get("restaurant_name").source
+                if item.field_lineage.get("restaurant_name")
+                else "FALLBACK"
+            ),
             "Chain": item.chain or "Standalone",
             "City": item.city,
             "Area": item.area,
@@ -268,7 +293,10 @@ table = pd.DataFrame(
                 item.restaurant_id, DocumentLegalStatus.BLOCKED
             ).value,
             "Email": "READY" if item.readiness.email_ready else "MISSING",
-            "Payment": "READY" if item.readiness.payment_ready else "MISSING RIB",
+            "Finance Email": item.finance_email or "RST email fallback",
+            "RIB Status": item.payment_readiness_status.value,
+            "Legal Master Review": item.legal_master_review_status,
+            "Payment": item.payment_readiness_status.value,
             "Mapping Status": item.mapping_status.value,
         }
         for item in filtered
@@ -298,6 +326,16 @@ with st.expander("Real source schema profiles"):
         f"File: {registry.rst_profile.filename} · Rows: {registry.rst_profile.row_count:,}"
     )
     st.write(list(registry.rst_profile.columns))
+    if registry.partner_legal_master and registry.partner_legal_master.profile:
+        master = registry.partner_legal_master
+        profile = master.profile
+        st.markdown("**Partner Legal Master · READ ONLY**")
+        st.caption(
+            f"File: {profile.filename} · Worksheet: {profile.selected_worksheet} · "
+            f"Rows: {profile.row_count:,} · Status: {master.status.value} · "
+            f"Fingerprint: {master.fingerprint[:16]}…"
+        )
+        st.write(list(profile.columns))
 
 st.info(
     "Registry outputs remain in application memory. No new Drive artifact, settlement, "

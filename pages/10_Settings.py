@@ -16,6 +16,10 @@ from src.ingestion.phase3_runtime import (
     run_phase3_ingestion,
 )
 from src.models.enums import HealthState
+from src.restaurants.registry_runtime import (
+    expire_partner_legal_master_cache,
+    run_restaurant_registry,
+)
 from src.ui.layout import page_setup, period_banner, status_badge
 
 
@@ -41,6 +45,11 @@ def load_conflict_diagnostics() -> ConflictDiagnostics:
     return run_conflict_diagnostics()
 
 
+@st.cache_data(ttl=300, show_spinner="Synchronizing Partner Legal Master…")
+def load_partner_legal_registry():
+    return run_restaurant_registry(drive=google_drive_client())
+
+
 def health_tone(health: HealthState) -> str:
     return {
         HealthState.HEALTHY: "success",
@@ -56,6 +65,7 @@ st.title("Data Sources")
 st.caption("Google Drive integration & ingestion readiness · Real metadata")
 
 if st.button("Refresh Google Drive", type="primary"):
+    expire_partner_legal_master_cache()
     st.cache_data.clear()
     st.cache_resource.clear()
     st.session_state["show_conflict_diagnostics"] = False
@@ -67,10 +77,15 @@ cards = (
     ("Google Connection", result.connection_state.value, result.health.google_connection),
     ("Admin Earnings", f"{len(result.valid_admin_files)} VALID FILES", result.health.admin_earnings),
     ("Invoice Scope", "CONNECTED" if result.invoice_scope else "NOT READY", result.health.invoice_scope),
+    (
+        "Partner Legal Master",
+        "CONNECTED" if result.partner_legal_master else "NOT READY",
+        result.health.partner_legal_master,
+    ),
     ("RST List", "CONNECTED" if result.rst_list else "NOT READY", result.health.rst_list),
     ("CashCo Workspace", "READY" if result.health.workspace == HealthState.HEALTHY else "CHECK ACCESS", result.health.workspace),
 )
-for column, (label, value, health) in zip(st.columns(5), cards, strict=True):
+for column, (label, value, health) in zip(st.columns(6), cards, strict=True):
     with column:
         st.markdown(
             f'<div class="cc-card"><div class="cc-kpi-label">{label}</div>'
@@ -81,6 +96,54 @@ for column, (label, value, health) in zip(st.columns(5), cards, strict=True):
 
 if result.message:
     (st.error if result.health.overall.value in {"BLOCKING", "AUTH_ERROR"} else st.warning)(result.message)
+
+st.markdown('<div class="cc-section">Partner Legal Master</div>', unsafe_allow_html=True)
+if result.partner_legal_master:
+    legal_registry = load_partner_legal_registry()
+    legal = legal_registry.partner_legal_master
+    if legal and legal.profile:
+        profile = legal.profile
+        legal_tone = (
+            "warning" if legal.status.value == "STALE_SOURCE" else "success"
+        )
+        st.markdown(
+            f"{status_badge(legal.status.value, legal_tone)} · "
+            f"{profile.filename} · worksheet {profile.selected_worksheet}",
+            unsafe_allow_html=True,
+        )
+        legal_cards = (
+            ("Rows", profile.row_count),
+            ("Unique IDs", profile.unique_restaurant_ids),
+            ("Scope matches", profile.matched_invoice_scope),
+            ("RST matches", profile.matched_rst),
+            ("Duplicate IDs", profile.duplicate_id_groups),
+            ("Conflicts", profile.conflict_groups),
+        )
+        for column, (label, value) in zip(
+            st.columns(6), legal_cards, strict=True
+        ):
+            column.metric(label, f"{value:,}")
+        st.caption(
+            f"Modified: {profile.modified_at:%d %b %Y %H:%M UTC} · "
+            f"Last successful sync: {legal.last_successful_sync:%d %b %Y %H:%M UTC} · "
+            f"Fingerprint: {legal.fingerprint[:16]}… · READ ONLY"
+        )
+        with st.expander("Technical source details"):
+            st.write(
+                {
+                    "File ID": profile.file_id,
+                    "Worksheets": profile.worksheet_names,
+                    "Selected worksheet": profile.selected_worksheet,
+                    "Columns": profile.column_count,
+                    "Missing IDs": profile.missing_ids,
+                    "Name mismatches": profile.name_mismatches,
+                    "Capabilities": profile.capabilities,
+                }
+            )
+    else:
+        st.error("Partner Legal Master could not be synchronized.")
+else:
+    st.error("Partner Legal Master is not readable.")
 
 st.markdown('<div class="cc-section">Admin Earnings inventory</div>', unsafe_allow_html=True)
 if result.valid_admin_files:

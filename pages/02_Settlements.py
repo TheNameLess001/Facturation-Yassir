@@ -9,6 +9,7 @@ import streamlit as st
 
 from src.config import get_settings
 from src.google.exceptions import GoogleIntegrationError
+from src.restaurants.registry_runtime import expire_partner_legal_master_cache
 from src.settlement.periods import SettlementPeriodService
 from src.settlement.phase5_models import (
     RestaurantSettlementEvaluation,
@@ -18,7 +19,7 @@ from src.settlement.phase5_runtime import run_phase5_settlement
 from src.ui.layout import page_setup, render_kpis
 
 
-@st.cache_data(ttl=900, show_spinner="Evaluating the settlement period…")
+@st.cache_data(ttl=300, show_spinner="Evaluating the settlement period…")
 def load_settlement(period_code: str):
     return run_phase5_settlement(period_code)
 
@@ -191,6 +192,7 @@ with controls[3]:
 actions = st.columns([1, 1, 4])
 evaluate = actions[0].button("Evaluate Period", type="primary")
 if actions[1].button("Refresh Google Sources"):
+    expire_partner_legal_master_cache()
     st.cache_data.clear()
     st.cache_resource.clear()
     st.session_state.pop("phase5_period", None)

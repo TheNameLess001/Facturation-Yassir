@@ -29,6 +29,8 @@ class LegalFieldStatus(StrEnum):
 
 class DocumentPartnerNameSource(StrEnum):
     LEGAL_ENTITY = "LEGAL_ENTITY"
+    RST_RESTAURANT_NAME = "RST_RESTAURANT_NAME"
+    INVOICE_SCOPE_NAME = "INVOICE_SCOPE_NAME"
     RESTAURANT_NAME_FALLBACK = "RESTAURANT_NAME_FALLBACK"
 
 
@@ -120,12 +122,10 @@ class DocumentLegalPolicy:
         legal_entity = self._text(restaurant.legal_entity)
         restaurant_name = self._text(restaurant.restaurant_name)
         partner_name = legal_entity or restaurant_name
-        name_source = (
-            DocumentPartnerNameSource.LEGAL_ENTITY
-            if legal_entity
-            else DocumentPartnerNameSource.RESTAURANT_NAME_FALLBACK
-            if restaurant_name
-            else None
+        name_source = self._partner_name_source(
+            restaurant,
+            legal_entity=legal_entity,
+            restaurant_name=restaurant_name,
         )
         values = {
             "document_partner_name": partner_name,
@@ -179,7 +179,10 @@ class DocumentLegalPolicy:
         warnings = bool(
             optional_missing
             or invalid_fields
-            or name_source == DocumentPartnerNameSource.RESTAURANT_NAME_FALLBACK
+            or (
+                name_source is not None
+                and name_source != DocumentPartnerNameSource.LEGAL_ENTITY
+            )
         )
         if missing_required:
             status = DocumentLegalStatus.BLOCKED
@@ -242,3 +245,21 @@ class DocumentLegalPolicy:
             )
             return restaurant.field_sources.get(source_field)
         return restaurant.field_sources.get(field)
+
+    @staticmethod
+    def _partner_name_source(
+        restaurant: RegisteredRestaurant,
+        *,
+        legal_entity: str | None,
+        restaurant_name: str | None,
+    ) -> DocumentPartnerNameSource | None:
+        if legal_entity:
+            return DocumentPartnerNameSource.LEGAL_ENTITY
+        if not restaurant_name:
+            return None
+        source = restaurant.field_sources.get("restaurant_name", "")
+        if source.startswith("RST_LIST:"):
+            return DocumentPartnerNameSource.RST_RESTAURANT_NAME
+        if source.startswith("INVOICE_SCOPE:"):
+            return DocumentPartnerNameSource.INVOICE_SCOPE_NAME
+        return DocumentPartnerNameSource.RESTAURANT_NAME_FALLBACK
