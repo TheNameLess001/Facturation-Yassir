@@ -124,7 +124,7 @@ Invoice Scope commission is authoritative for settlement eligibility. RST commis
 
 ### LegacyCalculationPolicy status
 
-The full authoritative legacy CashCo implementation is **not present** in this repository, its reachable Git history, or available reference files. The initial repository prototype documents only `payable`, a `ROUND_HALF_UP` commission calculation, and `net payable`; it contains no authoritative HT, TVA, TTC, note de débours, or final document formulas. Phase 5 therefore profiles and classifies real orders and calculates safe settlement inputs, but deliberately leaves those unavailable legacy outputs null. They must not be inferred or redesigned without an authoritative legacy reference.
+The business owner has approved the monetary block in the production source `4_Generateur bulk.py` as authoritative. CashCo V2 reproduces it as `cashco_legacy_v1`: Sales TTC is Item total; Sales HT is Sales TTC divided by 1.2; Commission HT is Sales HT multiplied by the normalized Invoice Scope rate; TVA is 20% of Commission HT; Invoice TTC is Commission HT plus TVA; and Net Payable is Sales TTC minus Invoice TTC. No intermediate value is rounded. Presentation and amount-to-words values are rounded to two decimals only at the final boundary.
 
 ## Financial review and document safety
 
@@ -132,13 +132,7 @@ CashCo preserves four distinct order facts: the immutable source operational sta
 
 Invoice Scope commission is the billing authority when it is present and valid. RST commission remains a validation reference. A difference is exposed as `COMMISSION_MISMATCH`, while the valid Scope rate remains effective; a missing or invalid Scope rate is blocking and CashCo does not silently fall back to RST.
 
-The legacy formula registry records evidence and confidence independently for every required output. No authoritative definitions have been found for the complete commission base, HT, TVA, TTC, note de débours, and final net payable chain. Consequently:
-
-- production financial formulas remain **NOT VALIDATED**;
-- previews are watermarked `DRAFT · NOT VALIDATED`;
-- unknown financial outputs remain null rather than fabricated;
-- document generation does not imply authorization;
-- no Google Drive `files.create` operation is used.
+The legacy formula registry records `4_Generateur bulk.py` as business-owner-confirmed `PRODUCTION_SOURCE_CODE` with `AUTHORITATIVE` confidence. The formula gate is certified, while manual review, invalid inputs, missing commission, identity, and legal-data gates remain independent. Document generation still does not imply authorization, and no Google Drive `files.create` operation is used.
 
 The Documents page provides versioned local JSON previews for invoice, note de débours, and partner statement models. Automatic production publication requires authoritative formula evidence plus a destination that supports safe document creation (for example, an approved Shared Drive or authorized user OAuth workflow).
 
@@ -171,26 +165,26 @@ Before a provider call, backend policy checks identity, settlement, manual revie
 
 Period locking is Admin-only and requires exact typed confirmation. A locked period rejects financial overrides, document mutation, authorization changes, and sending. Controlled reopening requires a reason and `REOPEN {period_code}`, writes an audit event, and invalidates the prior authorization without deleting historical send records.
 
-The current authoritative legacy formulas are still unavailable. Production documents, EMAIL_READY, authorization for SEND, and production delivery therefore remain blocked. Implementation approval is not GO-LIVE approval; production activation requires the separately documented financial, legal, Gmail, dry-run, safety-flag, and explicit human authorization checks.
+The monetary formula blocker is removed, but production documents and EMAIL_READY still depend on their real legal, settlement-review, commission, financial-data, and recipient gates. Implementation approval is not GO-LIVE approval; production delivery remains disabled until the separately documented Gmail, dry-run, safety-flag, and explicit human authorization checks pass.
 
 ## Production Activation 1 — financial formula certification
 
-CashCo now exposes a versioned financial-policy contract, structured evidence report, exact Decimal parity engine, and `FinancialFormulaCertification` gate. Certification can be `NOT_FOUND`, `DISCOVERED`, `PARITY_FAILED`, `PARTIALLY_VALIDATED`, or `CERTIFIED`. It requires authoritative evidence for every required field, an implemented policy version, multiple complete historical parity cases, no hidden tolerance, and zero reconciliation difference. Evidence alone cannot unlock production calculations.
+CashCo exposes a versioned financial-policy contract, structured evidence report, exact Decimal parity engine, and `FinancialFormulaCertification` gate. `cashco_legacy_v1` is certified from the explicitly approved authoritative production generator and deterministic source-formula tests. Historical settlement artifacts are useful additional regression evidence, but are not required to establish the approved business formula and zero available historical cases do not downgrade certification.
 
-The exhaustive repository audit covered the working tree, all reachable commits, deleted paths, reflogs, unreachable Git blobs, the remote branch/tag inventory, and PDF/Excel/CSV/template filenames. The original remote repository contains only its one-line README; no legacy production code, invoice, settlement spreadsheet, note de débours, or approved specification exists. The current `SettlementCalculator` remains WEAK prototype evidence and does not establish a commission base, tax rate, HT/TVA/TTC chain, debours components, compensation treatment, or rounding stages. Certification therefore remains `NOT_FOUND`; no policy version is assigned and all production amounts stay null.
+An optional historical parity case can include immutable historical source orders and rebuild the complete chain through the versioned policy:
+
+```text
+Source orders → Partner amount → Commission base → Commission
+→ HT → TVA → TTC → Note de débours → Net payable
+```
+
+CashCo then compares OLD CashCo with V2 independently for Commission, HT, TVA, TTC, note de débours, and net payable. A regression case reports `MATCH`, `MISMATCH`, or `NO_REFERENCE`; exact reconstructed matches have a `0.00 MAD` total difference. These diagnostics do not override or downgrade the approved production-source certification.
+
+The authoritative evidence record identifies `4_Generateur bulk.py`, evidence type `PRODUCTION_SOURCE_CODE`, approval `BUSINESS_OWNER_CONFIRMED`, and confidence `AUTHORITATIVE`. The private legacy script itself is not committed. Only the approved formulas, policy version, evidence metadata, and synthetic deterministic test cases are stored in this repository.
 
 The Documents workbench accepts local PDF, CSV, and Excel references for memory-only inspection. PDF files are not OCR-processed. CSV/Excel files retain only schema, sheet names, row counts, size, and SHA-256 in the runtime profile; row values and source bytes are not persisted or uploaded to Drive.
 
-To complete certification, provide approved reference material covering multiple restaurants and both P1/P2 where available:
-
-- authoritative production code or an approved accounting specification;
-- historical settlement workbooks with their original Excel formulas intact;
-- matched production invoices and notes de débours for the same restaurant/period;
-- expected commission, HT, TVA, TTC, debours, and net payable values;
-- documented order eligibility, promotion, delivery-fee, cancellation, and compensation treatment;
-- the exact TVA rate/source, rounding precision/mode, and rounding stage.
-
-Synthetic tests demonstrate the certification mechanics only. Their formulas and rates are explicitly non-production and are never loaded by the application runtime.
+The local reference importer and source-order reconstruction engine remain available for optional future regression cases. They are not a prerequisite for the approved monetary policy. Existing Phase 5 order eligibility and cancellation decisions remain unchanged and separate from this monetary certification.
 
 ## Source discovery boundary
 

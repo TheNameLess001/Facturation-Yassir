@@ -92,17 +92,23 @@ st.dataframe(
     hide_index=True,
     width="stretch",
 )
-st.warning("Financial document totals are not displayed because legacy formulas are not validated.")
+st.info(
+    "Financial policy cashco_legacy_v1 is certified. Document production remains "
+    "subject to legal, review, commission and financial-data gates."
+)
 
 st.markdown("### Financial Formula Certification")
 certification = LegacyFormulaRegistry().certification()
+st.caption(
+    "Authoritative source · 4_Generateur bulk.py · Business approval CONFIRMED"
+)
 render_kpis(
     [
-        ("Policy", certification.policy_version or "NOT ASSIGNED", "Version required"),
-        ("Commission Base", "NOT_VALIDATED", "No authoritative evidence"),
-        ("HT / TVA / TTC", "NOT_VALIDATED", "TVA rate not assumed"),
-        ("Note de débours", "NOT_VALIDATED", "Components unproven"),
-        ("Net Payable", "NOT_VALIDATED", "No production value"),
+        ("Policy", certification.policy_version or "NOT ASSIGNED", "Production source approved"),
+        ("Commission Base", "CERTIFIED", "Sales TTC / 1.2"),
+        ("HT / TVA / TTC", "CERTIFIED", "TVA 20% on commission HT"),
+        ("Note de débours", "CERTIFIED", "Sales TTC minus invoice TTC"),
+        ("Net Payable", "CERTIFIED", "No intermediate rounding"),
         ("Certification", certification.status.value, certification.reason),
     ]
 )

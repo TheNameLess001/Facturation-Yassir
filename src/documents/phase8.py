@@ -82,8 +82,8 @@ class Phase8DocumentEngine:
         policy: LegacyCalculationPolicy | None = None,
     ) -> None:
         self.formulas = formulas or LegacyFormulaRegistry()
-        self.certification = certification
-        self.policy = policy
+        self.certification = certification or self.formulas.certification()
+        self.policy = policy or self.formulas.active_policy()
 
     def financial_formulas_ready(self) -> bool:
         return bool(
@@ -208,6 +208,8 @@ class Phase8DocumentEngine:
         self, settlement: RestaurantSettlementEvaluation
     ) -> dict[str, str | None]:
         empty = {
+            "sales_ttc": None,
+            "sales_ht": None,
             "commission_amount": None,
             "invoice_ht": None,
             "invoice_tva": None,
@@ -226,13 +228,27 @@ class Phase8DocumentEngine:
             certification=self.certification,
             policy=self.policy,
         )
+        def present(value: object, field: str) -> str | None:
+            if value is None:
+                return None
+            rounded = self.policy.rounding_policy(value, field)
+            return f"{rounded:.2f}"
+
         return {
-            "commission_amount": str(calculated.commission_amount),
-            "invoice_ht": str(calculated.invoice_ht),
-            "invoice_tva": str(calculated.invoice_tva),
-            "invoice_ttc": str(calculated.invoice_ttc),
-            "note_de_debours": str(calculated.disbursement_note),
-            "final_net_payable": str(calculated.net_payable),
+            "sales_ttc": present(calculated.sales_ttc, "sales_ttc"),
+            "sales_ht": present(calculated.sales_ht, "sales_ht"),
+            "commission_amount": present(
+                calculated.commission_amount, "commission_amount"
+            ),
+            "invoice_ht": present(calculated.invoice_ht, "invoice_ht"),
+            "invoice_tva": present(calculated.invoice_tva, "invoice_tva"),
+            "invoice_ttc": present(calculated.invoice_ttc, "invoice_ttc"),
+            "note_de_debours": present(
+                calculated.disbursement_note, "note_de_debours"
+            ),
+            "final_net_payable": present(
+                calculated.net_payable, "final_net_payable"
+            ),
         }
 
     @staticmethod

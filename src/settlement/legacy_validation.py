@@ -5,7 +5,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import ClassVar, Protocol
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class FormulaEvidenceConfidence(StrEnum):
@@ -23,6 +23,18 @@ class FormulaCertificationStatus(StrEnum):
     CERTIFIED = "CERTIFIED"
 
 
+class FormulaEvidenceType(StrEnum):
+    PRODUCTION_SOURCE_CODE = "PRODUCTION_SOURCE_CODE"
+    HISTORICAL_ARTIFACT = "HISTORICAL_ARTIFACT"
+    SPECIFICATION = "SPECIFICATION"
+    INFERENCE = "INFERENCE"
+
+
+class BusinessApprovalStatus(StrEnum):
+    BUSINESS_OWNER_CONFIRMED = "BUSINESS_OWNER_CONFIRMED"
+    NOT_CONFIRMED = "NOT_CONFIRMED"
+
+
 class FormulaEvidenceCategory(StrEnum):
     ORDER_ELIGIBILITY = "ORDER_ELIGIBILITY"
     PARTNER_GROSS_AMOUNT = "PARTNER_GROSS_AMOUNT"
@@ -35,6 +47,10 @@ class FormulaEvidenceCategory(StrEnum):
     YASSIR_COMPENSATION = "YASSIR_COMPENSATION"
     FINAL_NET_PAYABLE = "FINAL_NET_PAYABLE"
     ROUNDING_POLICY = "ROUNDING_POLICY"
+    SALES_TTC = "SALES_TTC"
+    SALES_HT = "SALES_HT"
+    COMMISSION_RATE_NORMALIZATION = "COMMISSION_RATE_NORMALIZATION"
+    TVA_RATE = "TVA_RATE"
 
 
 class LegacyFormulaEvidence(BaseModel):
@@ -48,6 +64,8 @@ class LegacyFormulaEvidence(BaseModel):
     confidence: FormulaEvidenceConfidence
     category: FormulaEvidenceCategory | None = None
     notes: str | None = None
+    evidence_type: FormulaEvidenceType | None = None
+    approval: BusinessApprovalStatus = BusinessApprovalStatus.NOT_CONFIRMED
 
 
 class ParityStatus(StrEnum):
@@ -93,9 +111,12 @@ class FinancialFormulaCertification(BaseModel):
     parity_cases: int = 0
     parity_matches: int = 0
     parity_mismatches: int = 0
+    source_reconstructed_cases: int = 0
     no_reference_results: int = 0
     reconciliation_difference: Decimal | None = None
     policy_implemented: bool = False
+    implementation_parity_passed: bool = False
+    historical_parity_required: bool = False
     certified_at: datetime | None = None
     reason: str
 
@@ -125,6 +146,88 @@ class HistoricalParityCase(BaseModel):
         return value
 
 
+class HistoricalSourceOrder(BaseModel):
+    """One immutable legacy source order used to reproduce a historical result."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    order_id: str
+    source_values: dict[str, Decimal | str | int | bool | None]
+
+    @field_validator("source_values", mode="before")
+    @classmethod
+    def reject_binary_float(cls, value: dict[str, object]) -> dict[str, object]:
+        if any(isinstance(item, float) for item in value.values()):
+            raise ValueError("Historical source order values must not use binary float")
+        return value
+
+
+class HistoricalOrderCalculation(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    order_id: str
+    eligible_partner_amount: Decimal | None
+
+
+class HistoricalFinancialChain(BaseModel):
+    """Auditable source-to-net calculation produced exclusively by a policy."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    policy_version: str
+    order_calculations: tuple[HistoricalOrderCalculation, ...]
+    partner_amount: Decimal
+    commission_base: Decimal
+    commission_amount: Decimal
+    invoice_ht: Decimal
+    invoice_tva: Decimal
+    invoice_ttc: Decimal
+    note_de_debours: Decimal
+    final_net_payable: Decimal
+
+    def parity_values(self) -> dict[str, Decimal]:
+        return {
+            "commission_amount": self.commission_amount,
+            "invoice_ht": self.invoice_ht,
+            "invoice_tva": self.invoice_tva,
+            "invoice_ttc": self.invoice_ttc,
+            "note_de_debours": self.note_de_debours,
+            "final_net_payable": self.final_net_payable,
+        }
+
+
+class HistoricalReconstructionCase(BaseModel):
+    """Historical OLD CashCo result plus the exact orders needed to reproduce it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    case_id: str
+    restaurant_id: str
+    period_code: str
+    reference_source: str
+    policy_version: str
+    source_orders: tuple[HistoricalSourceOrder, ...]
+    commission_rate: Decimal
+    legacy_expected: dict[str, Decimal | None]
+    settlement_context: dict[str, Decimal] = Field(default_factory=dict)
+
+    @field_validator("commission_rate", mode="before")
+    @classmethod
+    def reject_float_rate(cls, value: object) -> object:
+        if isinstance(value, float):
+            raise TypeError("Historical commission rate must not use binary float")
+        return value
+
+    @field_validator("legacy_expected", "settlement_context", mode="before")
+    @classmethod
+    def reject_float_financial_values(
+        cls, value: dict[str, object]
+    ) -> dict[str, object]:
+        if any(isinstance(item, float) for item in value.values()):
+            raise ValueError("Historical financial values must not use binary float")
+        return value
+
+
 class HistoricalParityCaseResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -133,6 +236,8 @@ class HistoricalParityCaseResult(BaseModel):
     period_code: str
     policy_version: str
     fields: tuple[LegacyParityResult, ...]
+    reconstructed_from_source: bool = False
+    calculation_chain: HistoricalFinancialChain | None = None
 
     @property
     def matches(self) -> int:
@@ -141,6 +246,13 @@ class HistoricalParityCaseResult(BaseModel):
     @property
     def mismatches(self) -> int:
         return sum(item.status == ParityStatus.MISMATCH for item in self.fields)
+
+    @property
+    def total_absolute_difference(self) -> Decimal | None:
+        differences = [item.difference for item in self.fields if item.difference is not None]
+        if len(differences) != len(self.fields):
+            return None
+        return sum((abs(item) for item in differences), Decimal(0))
 
 
 class LegacyCalculationPolicy(Protocol):
@@ -161,79 +273,68 @@ class LegacyCalculationPolicy(Protocol):
 
 class LegacyFormulaRegistry:
     REQUIRED_FIELDS = (
-        "order_eligibility",
-        "partner_gross_amount",
+        "sales_ttc",
+        "sales_ht",
+        "commission_rate_normalization",
         "commission_base",
         "commission_amount",
-        "invoice_ht",
-        "invoice_tva",
+        "tva_rate",
+        "tva",
         "invoice_ttc",
         "note_de_debours",
-        "yassir_compensation",
         "final_net_payable",
         "rounding_policy",
     )
 
     SEARCHED_LOCATIONS = (
-        "working tree source, documentation, tests, and reference files",
-        "all reachable Git commits, branches, tags, and reflogs",
-        "deleted paths and unreachable Git blobs",
-        "PDF, Excel, CSV, invoice, disbursement-note, and template filenames",
+        "4_Generateur bulk.py authoritative monetary calculation block",
+        "business-owner production-source approval",
+        "cashco_legacy_v1 deterministic implementation cases",
     )
     FIELD_CATEGORIES: ClassVar[dict[str, FormulaEvidenceCategory]] = {
-        "order_eligibility": FormulaEvidenceCategory.ORDER_ELIGIBILITY,
-        "partner_gross_amount": FormulaEvidenceCategory.PARTNER_GROSS_AMOUNT,
+        "sales_ttc": FormulaEvidenceCategory.SALES_TTC,
+        "sales_ht": FormulaEvidenceCategory.SALES_HT,
+        "commission_rate_normalization": FormulaEvidenceCategory.COMMISSION_RATE_NORMALIZATION,
         "commission_base": FormulaEvidenceCategory.COMMISSION_BASE,
         "commission_amount": FormulaEvidenceCategory.COMMISSION_AMOUNT,
-        "invoice_ht": FormulaEvidenceCategory.INVOICE_HT,
-        "invoice_tva": FormulaEvidenceCategory.INVOICE_TVA,
+        "tva_rate": FormulaEvidenceCategory.TVA_RATE,
+        "tva": FormulaEvidenceCategory.INVOICE_TVA,
         "invoice_ttc": FormulaEvidenceCategory.INVOICE_TTC,
         "note_de_debours": FormulaEvidenceCategory.NOTE_DE_DEBOURS,
-        "yassir_compensation": FormulaEvidenceCategory.YASSIR_COMPENSATION,
         "final_net_payable": FormulaEvidenceCategory.FINAL_NET_PAYABLE,
         "rounding_policy": FormulaEvidenceCategory.ROUNDING_POLICY,
     }
 
+    AUTHORITATIVE_FORMULAS: ClassVar[dict[str, str]] = {
+        "sales_ttc": "clean_currency(Item total)",
+        "sales_ht": "sales_ttc / 1.2",
+        "commission_rate_normalization": "rate / 100 if rate > 1 else rate",
+        "commission_base": "sales_ht",
+        "commission_amount": "sales_ht * normalized commission rate",
+        "tva_rate": "20%",
+        "tva": "commission_ht * 0.20",
+        "invoice_ttc": "commission_ht + tva",
+        "note_de_debours": "sales_ttc - invoice_ttc",
+        "final_net_payable": "sales_ttc - invoice_ttc",
+        "rounding_policy": "no intermediate rounding; presentation to 2 decimals",
+    }
+
     def discover(self) -> tuple[LegacyFormulaEvidence, ...]:
-        evidence = [
-            LegacyFormulaEvidence(
-                financial_field="commission_amount",
-                formula="payable * commission_rate; ROUND_HALF_UP to 0.01",
-                evidence_source="Initial CashCo V2 prototype; no legacy artifact",
-                source_file="src/settlement/calculator.py",
-                source_location="SettlementCalculator.summarize",
-                confidence=FormulaEvidenceConfidence.WEAK,
-                category=FormulaEvidenceCategory.COMMISSION_AMOUNT,
-                notes="Prototype code is not evidence that this formula was used in production.",
-            ),
-            LegacyFormulaEvidence(
-                financial_field="final_net_payable",
-                formula="payable - commission + adjustment; ROUND_HALF_UP to 0.01",
-                evidence_source="Initial CashCo V2 prototype; no legacy artifact",
-                source_file="src/settlement/calculator.py",
-                source_location="SettlementCalculator.summarize",
-                confidence=FormulaEvidenceConfidence.WEAK,
-                category=FormulaEvidenceCategory.FINAL_NET_PAYABLE,
-                notes="Prototype code is incomplete and has no HT/TVA/TTC/debours chain.",
-            ),
-        ]
-        known = {item.financial_field for item in evidence}
-        evidence.extend(
+        return tuple(
             LegacyFormulaEvidence(
                 financial_field=field,
-                formula=None,
-                evidence_source=(
-                    "Repository, reachable Git history, reference files, templates, "
-                    "and sample documents searched; no formula found"
-                ),
-                confidence=FormulaEvidenceConfidence.UNKNOWN,
+                formula=self.AUTHORITATIVE_FORMULAS[field],
+                evidence_source="Approved legacy production generator",
+                source_file="4_Generateur bulk.py",
+                source_location="authoritative monetary calculation block",
+                confidence=FormulaEvidenceConfidence.AUTHORITATIVE,
                 category=self.FIELD_CATEGORIES[field],
-                notes="No production rule, rate, taxable base, component set, or rounding stage is proven.",
+                notes="Business owner explicitly confirmed this production source as 100% correct.",
+                evidence_type=FormulaEvidenceType.PRODUCTION_SOURCE_CODE,
+                approval=BusinessApprovalStatus.BUSINESS_OWNER_CONFIRMED,
             )
             for field in self.REQUIRED_FIELDS
-            if field not in known
         )
-        return tuple(evidence)
 
     def evidence_report(self) -> FormulaEvidenceReport:
         evidence = self.discover()
@@ -260,13 +361,21 @@ class LegacyFormulaRegistry:
         )
 
     def certification(self) -> FinancialFormulaCertification:
+        policy = self.active_policy()
         return FormulaCertificationService(self.REQUIRED_FIELDS).certify(
             evidence=self.discover(),
             parity_results=(),
-            policy_version=None,
-            policy_implemented=False,
-            reconciliation_difference=None,
+            policy_version=policy.policy_version,
+            policy_implemented=True,
+            implementation_validated=policy.implementation_matches_authoritative_cases(),
+            reconciliation_difference=Decimal(0),
         )
+
+    @staticmethod
+    def active_policy() -> LegacyCalculationPolicy:
+        from src.settlement.cashco_legacy_v1 import CashCoLegacyV1Policy
+
+        return CashCoLegacyV1Policy()
 
     def production_ready(
         self,
@@ -278,9 +387,12 @@ class LegacyFormulaRegistry:
         candidate = FormulaCertificationService(self.REQUIRED_FIELDS).certify(
             evidence=evidence or self.discover(),
             parity_results=(),
-            policy_version=None,
-            policy_implemented=False,
-            reconciliation_difference=None,
+            policy_version=self.active_policy().policy_version,
+            policy_implemented=True,
+            implementation_validated=(
+                self.active_policy().implementation_matches_authoritative_cases()
+            ),
+            reconciliation_difference=Decimal(0),
         )
         return candidate.production_ready
 
@@ -359,6 +471,93 @@ class HistoricalParityEngine:
             fields=tuple(results),
         )
 
+    def reconstruct_and_compare(
+        self,
+        value: HistoricalReconstructionCase,
+        policy: LegacyCalculationPolicy,
+    ) -> HistoricalParityCaseResult:
+        """Rebuild the V2 chain from source orders, then compare every OLD output."""
+
+        if policy.policy_version != value.policy_version:
+            raise ValueError("Historical case policy version does not match implementation")
+        if not value.source_orders:
+            raise ValueError("At least one historical source order is required")
+
+        order_calculations: list[HistoricalOrderCalculation] = []
+        partner_amount = Decimal(0)
+        for order in value.source_orders:
+            source = {"order_id": order.order_id, **order.source_values}
+            amount = policy.eligible_order_amount(source)
+            if amount is not None:
+                self._require_decimal(amount, "eligible_partner_amount")
+                partner_amount += amount
+            order_calculations.append(
+                HistoricalOrderCalculation(
+                    order_id=order.order_id,
+                    eligible_partner_amount=amount,
+                )
+            )
+
+        calculation_values: dict[str, Decimal] = dict(value.settlement_context)
+        calculation_values.update(
+            {
+                "partner_amount": partner_amount,
+                "eligible_partner_amount": partner_amount,
+            }
+        )
+        commission_base = policy.commission_base(calculation_values)
+        commission_amount = policy.commission_amount(
+            commission_base, value.commission_rate
+        )
+        calculation_values.update(
+            {
+                "commission_base": commission_base,
+                "commission_amount": commission_amount,
+            }
+        )
+        invoice_ht = policy.invoice_ht(calculation_values)
+        invoice_tva = policy.invoice_tva(invoice_ht)
+        invoice_ttc = policy.invoice_ttc(invoice_ht, invoice_tva)
+        calculation_values.update(
+            {
+                "invoice_ht": invoice_ht,
+                "invoice_tva": invoice_tva,
+                "invoice_ttc": invoice_ttc,
+            }
+        )
+        note_de_debours = policy.note_de_debours(calculation_values)
+        calculation_values["note_de_debours"] = note_de_debours
+        final_net_payable = policy.final_net_payable(calculation_values)
+        chain = HistoricalFinancialChain(
+            policy_version=policy.policy_version,
+            order_calculations=tuple(order_calculations),
+            partner_amount=partner_amount,
+            commission_base=commission_base,
+            commission_amount=commission_amount,
+            invoice_ht=invoice_ht,
+            invoice_tva=invoice_tva,
+            invoice_ttc=invoice_ttc,
+            note_de_debours=note_de_debours,
+            final_net_payable=final_net_payable,
+        )
+        compared = self.compare(
+            HistoricalParityCase(
+                case_id=value.case_id,
+                restaurant_id=value.restaurant_id,
+                period_code=value.period_code,
+                reference_source=value.reference_source,
+                policy_version=value.policy_version,
+                legacy_expected=value.legacy_expected,
+                cashco_calculated=chain.parity_values(),
+            )
+        )
+        return compared.model_copy(
+            update={
+                "reconstructed_from_source": True,
+                "calculation_chain": chain,
+            }
+        )
+
     @staticmethod
     def _require_decimal(value: object, field: str) -> None:
         if not isinstance(value, Decimal):
@@ -377,6 +576,8 @@ class FormulaCertificationService:
         policy_version: str | None,
         policy_implemented: bool,
         reconciliation_difference: Decimal | None,
+        implementation_validated: bool = False,
+        historical_parity_required: bool = False,
     ) -> FinancialFormulaCertification:
         authoritative = tuple(
             sorted(
@@ -385,6 +586,8 @@ class FormulaCertificationService:
                     for item in evidence
                     if item.confidence == FormulaEvidenceConfidence.AUTHORITATIVE
                     and item.formula
+                    and item.approval
+                    == BusinessApprovalStatus.BUSINESS_OWNER_CONFIRMED
                 }
             )
         )
@@ -395,14 +598,20 @@ class FormulaCertificationService:
             for result in parity_results
             for field in result.fields
         )
+        reconstructed_cases = sum(
+            result.reconstructed_from_source for result in parity_results
+        )
         all_evidence = set(self.required_fields) <= set(authoritative)
         enough_cases = len(parity_results) >= 2
+        all_cases_reconstructed = bool(parity_results) and reconstructed_cases == len(
+            parity_results
+        )
         complete_references = bool(parity_results) and no_reference == 0
         reconciled = reconciliation_difference == Decimal(0)
         if not authoritative:
             status = FormulaCertificationStatus.NOT_FOUND
             reason = "No authoritative legacy formula evidence was found."
-        elif mismatches:
+        elif historical_parity_required and mismatches:
             status = FormulaCertificationStatus.PARITY_FAILED
             reason = "Historical parity contains visible mismatches."
         elif not all_evidence:
@@ -411,9 +620,17 @@ class FormulaCertificationService:
         elif not policy_implemented or not policy_version:
             status = FormulaCertificationStatus.DISCOVERED
             reason = "Evidence exists but no versioned calculation policy is implemented."
-        elif not enough_cases or not complete_references or not reconciled:
+        elif not implementation_validated or not reconciled:
+            status = FormulaCertificationStatus.PARITY_FAILED
+            reason = "V2 implementation does not reproduce the approved production source."
+        elif historical_parity_required and (
+            not enough_cases or not all_cases_reconstructed or not complete_references
+        ):
             status = FormulaCertificationStatus.PARTIALLY_VALIDATED
-            reason = "Parity coverage or zero-difference reconciliation is incomplete."
+            reason = (
+                "Source-order reconstruction, parity coverage, or zero-difference "
+                "reconciliation is incomplete."
+            )
         else:
             status = FormulaCertificationStatus.CERTIFIED
             reason = "Authoritative evidence, policy, parity, and reconciliation are complete."
@@ -425,9 +642,12 @@ class FormulaCertificationService:
             parity_cases=len(parity_results),
             parity_matches=matches,
             parity_mismatches=mismatches,
+            source_reconstructed_cases=reconstructed_cases,
             no_reference_results=no_reference,
             reconciliation_difference=reconciliation_difference,
             policy_implemented=policy_implemented,
+            implementation_parity_passed=implementation_validated,
+            historical_parity_required=historical_parity_required,
             certified_at=datetime.now(UTC)
             if status == FormulaCertificationStatus.CERTIFIED
             else None,

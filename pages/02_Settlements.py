@@ -59,10 +59,23 @@ def settlement_dialog(settlement: RestaurantSettlementEvaluation) -> None:
                 else "MISSING"
             ),
         )
-        st.info(
-            "HT, TVA, TTC, note de débours and net payable are not calculated: "
-            "the authoritative legacy formulas are not present in this repository."
-        )
+        if settlement.financial_policy_version:
+            st.write(
+                {
+                    "Policy": settlement.financial_policy_version,
+                    "Sales TTC": f"{settlement.sales_ttc:,.2f} MAD",
+                    "Sales HT / Commission Base": f"{settlement.sales_ht:,.2f} MAD",
+                    "Commission HT": f"{settlement.commission_amount:,.2f} MAD",
+                    "TVA": f"{settlement.invoice_tva:,.2f} MAD",
+                    "Invoice TTC": f"{settlement.invoice_ttc:,.2f} MAD",
+                    "Net Payable": f"{settlement.net_payable:,.2f} MAD",
+                }
+            )
+        else:
+            st.info(
+                "Monetary calculation is unavailable until this restaurant clears "
+                "its financial review, commission, and data-quality blockers."
+            )
     with orders_tab:
         st.dataframe(
             pd.DataFrame(
@@ -294,12 +307,8 @@ with st.expander("Real Admin Earnings status profile"):
         width="stretch",
     )
 
-if not result.legacy_policy.identified:
-    st.error(
-        "LEGACY CALCULATION POLICY NOT IDENTIFIED · Financial eligibility is real, "
-        "but HT/TVA/TTC, note de débours and net payable remain unavailable."
-    )
 st.info(
-    "System-derived decisions are previews only. Manual overrides are unavailable until Phase 6."
+    "Monetary calculations use certified policy cashco_legacy_v1. System decisions and "
+    "append-only manual overrides remain independently auditable."
 )
 st.warning("AUTOMATION OFF · WAITING FOR ADMIN AUTHORIZATION")

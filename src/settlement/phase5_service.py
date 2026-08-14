@@ -15,10 +15,12 @@ from src.restaurants.registry_models import (
     RegisteredRestaurant,
     RestaurantRegistryResult,
 )
+from src.settlement.certified_calculator import CertifiedFinancialCalculator
 from src.settlement.financial_rules import (
     ENGINE_VERSION,
     FinancialEligibilityRuleEngine,
 )
+from src.settlement.legacy_validation import LegacyFormulaRegistry
 from src.settlement.overrides import FinancialOverride, latest_overrides
 from src.settlement.phase5_models import (
     AdminStatusProfile,
@@ -49,6 +51,9 @@ class Phase5SettlementService:
     def __init__(self) -> None:
         self.rules = FinancialEligibilityRuleEngine()
         self.legacy_policy = LegacyCalculationPolicy.repository_audit_result()
+        self.formula_registry = LegacyFormulaRegistry()
+        self.certified_policy = self.formula_registry.active_policy()
+        self.formula_certification = self.formula_registry.certification()
 
     def evaluate(
         self,
@@ -339,7 +344,7 @@ class Phase5SettlementService:
             status = RestaurantSettlementStatus.REVIEW_REQUIRED
         else:
             status = RestaurantSettlementStatus.READY
-        return RestaurantSettlementEvaluation(
+        evaluation = RestaurantSettlementEvaluation(
             period_code=period.period_code,
             restaurant_id=restaurant.restaurant_id or "",
             restaurant_name=restaurant.restaurant_name,
@@ -371,6 +376,13 @@ class Phase5SettlementService:
             issue_codes=unique_issues,
             orders=orders,
         )
+        if status == RestaurantSettlementStatus.READY:
+            return CertifiedFinancialCalculator().calculate(
+                evaluation,
+                certification=self.formula_certification,
+                policy=self.certified_policy,
+            )
+        return evaluation
 
     @staticmethod
     def _canonical_period(

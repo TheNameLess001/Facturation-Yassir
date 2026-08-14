@@ -37,18 +37,20 @@ class CertifiedFinancialCalculator:
         ht = policy.invoice_ht(values)
         tva = policy.invoice_tva(ht)
         ttc = policy.invoice_ttc(ht, tva)
-        debours = policy.note_de_debours(values)
         values.update(
             {
                 "invoice_ht": ht,
                 "invoice_tva": tva,
                 "invoice_ttc": ttc,
-                "note_de_debours": debours,
             }
         )
+        debours = policy.note_de_debours(values)
+        values["note_de_debours"] = debours
         net = policy.final_net_payable(values)
         return settlement.model_copy(
             update={
+                "sales_ttc": settlement.eligible_partner_amount,
+                "sales_ht": base,
                 "commission_base": base,
                 "commission_amount": commission,
                 "invoice_ht": ht,

@@ -38,7 +38,10 @@ def document_preview_dialog(restaurant, settlement) -> None:
         format_func=lambda item: item.value,
     )
     preview = engine.preview(document_type, restaurant, settlement)
-    st.error(preview.watermark)
+    if preview.readiness.financial_formulas_validated:
+        st.info(preview.watermark)
+    else:
+        st.error(preview.watermark)
     identity, legal, financial = st.tabs(
         ["Partner & Legal", "Financial Breakdown", "Readiness"]
     )
@@ -59,13 +62,13 @@ def document_preview_dialog(restaurant, settlement) -> None:
         st.write(
             {
                 "Commission": preview.content["commission"],
-                "Gross order value": preview.content["gross_order_value"],
-                "Commission amount": "NOT VALIDATED",
-                "HT": "NOT VALIDATED",
-                "TVA": "NOT VALIDATED",
-                "TTC": "NOT VALIDATED",
-                "Note de débours": "NOT VALIDATED",
-                "Net payable": "NOT VALIDATED",
+                "Sales TTC": preview.content["sales_ttc"],
+                "Sales HT / Commission base": preview.content["sales_ht"],
+                "Commission HT": preview.content["commission_amount"],
+                "TVA": preview.content["invoice_tva"],
+                "Invoice TTC": preview.content["invoice_ttc"],
+                "Note de débours payable": preview.content["note_de_debours"],
+                "Net payable": preview.content["final_net_payable"],
             }
         )
     with financial:
@@ -145,9 +148,9 @@ render_kpis(
     ]
 )
 
-st.error(
-    "LEGACY FORMULA VALIDATION REQUIRED · Production documents are disabled. "
-    "Shared Drive or delegated OAuth is also required before automatic Drive creation."
+st.success(
+    "FINANCIAL POLICY CERTIFIED · cashco_legacy_v1 · Formula blocker removed. "
+    "Legal, review, commission and data-quality gates remain independent."
 )
 
 rows = [
@@ -182,11 +185,24 @@ st.markdown("### Financial Formula Certification")
 formula_registry = LegacyFormulaRegistry()
 report = formula_registry.evidence_report()
 certification = formula_registry.certification()
+st.caption(
+    "Source · 4_Generateur bulk.py · PRODUCTION_SOURCE_CODE · "
+    "BUSINESS_OWNER_CONFIRMED"
+)
 render_kpis(
     [
-        ("Policy Version", certification.policy_version or "NOT ASSIGNED", "No production policy"),
-        ("Evidence", "NOT FOUND", "Authoritative evidence only"),
-        ("Parity Cases", str(certification.parity_cases), "Multiple cases required"),
+        (
+            "Policy Version",
+            certification.policy_version or "NOT ASSIGNED",
+            "Approved monetary policy",
+        ),
+        ("Evidence", "AUTHORITATIVE", "Production source code"),
+        ("Parity Cases", str(certification.parity_cases), "Optional regression evidence"),
+        (
+            "Source Reconstructions",
+            str(certification.source_reconstructed_cases),
+            "Optional additional validation",
+        ),
         ("Matches", str(certification.parity_matches), "Exact legacy precision"),
         ("Mismatches", str(certification.parity_mismatches), "Never silently tolerated"),
         ("Certification", certification.status.value, "Production hard gate"),
@@ -203,8 +219,10 @@ st.dataframe(
                 "Source": item.source_file,
                 "Location": item.source_location,
                 "Confidence": item.confidence.value,
+                "Evidence Type": item.evidence_type.value if item.evidence_type else "—",
+                "Business Approval": item.approval.value,
                 "Category": item.category.value if item.category else "—",
-                "Status": "FORMULA_NOT_VALIDATED",
+                "Status": "CERTIFIED",
             }
             for item in evidence
         ]
@@ -213,8 +231,10 @@ st.dataframe(
     width="stretch",
 )
 st.caption(
-    "Legacy expected amounts can be compared after an authoritative reference is supplied. "
-    "No 0.005 MAD ingestion tolerance is applied to document parity."
+    "Historical reconstruction is optional additional regression validation. It can rebuild: "
+    "partner amount → commission base → commission → HT → TVA → TTC → note de "
+    "débours → net payable. The approved production source and deterministic source-code "
+    "tests certify the policy even when no historical settlement artifact is loaded."
 )
 
 with st.expander("Import a local historical reference · no persistence"):

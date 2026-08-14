@@ -333,12 +333,13 @@ def test_status_profile_preserves_actual_source_values() -> None:
     )
 
 
-def test_legacy_calculation_policy_refuses_to_invent_missing_formulas() -> None:
+def test_legacy_calculation_policy_uses_approved_production_source() -> None:
     policy = Phase5SettlementService().legacy_policy
-    assert policy.identified is False
-    assert policy.authoritative is False
-    assert "invoice_tva" in policy.unavailable_outputs
-    assert "disbursement_note" in policy.unavailable_outputs
+    assert policy.identified is True
+    assert policy.authoritative is True
+    assert policy.source_reference.startswith("4_Generateur bulk.py")
+    assert policy.unavailable_outputs == ()
+    assert policy.prototype_formulas["sales_ht"] == "sales_ttc / 1.2"
 
 
 def test_commission_rate_normalization_uses_decimal() -> None:

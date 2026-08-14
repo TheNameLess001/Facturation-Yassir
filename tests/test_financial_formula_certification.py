@@ -17,14 +17,23 @@ from src.restaurants.registry_models import (
     RegisteredRestaurant,
     RestaurantReadiness,
 )
+from src.settlement.cashco_legacy_v1 import (
+    AUTHORITATIVE_SOURCE,
+    POLICY_VERSION,
+    TVA_RATE,
+    CashCoLegacyV1Policy,
+)
 from src.settlement.certified_calculator import CertifiedFinancialCalculator
 from src.settlement.legacy_validation import (
+    BusinessApprovalStatus,
     FinancialFormulaCertification,
     FormulaCertificationService,
     FormulaCertificationStatus,
     FormulaEvidenceConfidence,
     HistoricalParityCase,
     HistoricalParityEngine,
+    HistoricalReconstructionCase,
+    HistoricalSourceOrder,
     LegacyFormulaEvidence,
     LegacyFormulaRegistry,
     ParityStatus,
@@ -94,6 +103,7 @@ def authoritative_evidence() -> tuple[LegacyFormulaEvidence, ...]:
             evidence_source="synthetic approved accounting specification",
             source_file="synthetic_fixture_only",
             confidence=FormulaEvidenceConfidence.AUTHORITATIVE,
+            approval=BusinessApprovalStatus.BUSINESS_OWNER_CONFIRMED,
         )
         for field in LegacyFormulaRegistry.REQUIRED_FIELDS
     )
@@ -122,13 +132,57 @@ def parity_case(case_id: str, *, mismatch: bool = False) -> HistoricalParityCase
     )
 
 
+def reconstruction_case(
+    case_id: str, *, mismatch: bool = False
+) -> HistoricalReconstructionCase:
+    expected = {
+        "commission_amount": Decimal("20.00"),
+        "invoice_ht": Decimal("20.00"),
+        "invoice_tva": Decimal("4.00"),
+        "invoice_ttc": Decimal("24.00"),
+        "note_de_debours": Decimal("100.00"),
+        "final_net_payable": Decimal("76.00"),
+    }
+    if mismatch:
+        expected["invoice_ttc"] = Decimal("24.01")
+    return HistoricalReconstructionCase(
+        case_id=case_id,
+        restaurant_id=f"R-{case_id}",
+        period_code="2026-07-P2",
+        reference_source="synthetic formula-bearing workbook",
+        policy_version="synthetic_test_v1",
+        commission_rate=Decimal("0.20"),
+        legacy_expected=expected,
+        settlement_context={"compensation_amount": Decimal("0.00")},
+        source_orders=(
+            HistoricalSourceOrder(
+                order_id=f"O-{case_id}-1",
+                source_values={"eligible": True, "amount": Decimal("60.00")},
+            ),
+            HistoricalSourceOrder(
+                order_id=f"O-{case_id}-2",
+                source_values={"eligible": True, "amount": Decimal("40.00")},
+            ),
+            HistoricalSourceOrder(
+                order_id=f"O-{case_id}-3",
+                source_values={"eligible": False, "amount": Decimal("5.00")},
+            ),
+        ),
+    )
+
+
 def certified() -> FinancialFormulaCertification:
     parity = HistoricalParityEngine()
+    policy = SyntheticCertifiedPolicy()
     return FormulaCertificationService(LegacyFormulaRegistry.REQUIRED_FIELDS).certify(
         evidence=authoritative_evidence(),
-        parity_results=(parity.compare(parity_case("1")), parity.compare(parity_case("2"))),
+        parity_results=(
+            parity.reconstruct_and_compare(reconstruction_case("1"), policy),
+            parity.reconstruct_and_compare(reconstruction_case("2"), policy),
+        ),
         policy_version="synthetic_test_v1",
         policy_implemented=True,
+        implementation_validated=True,
         reconciliation_difference=Decimal(0),
     )
 
@@ -185,14 +239,17 @@ def settlement() -> RestaurantSettlementEvaluation:
     )
 
 
-def test_repository_evidence_is_weak_or_unknown_and_not_found() -> None:
+def test_approved_production_source_certifies_active_policy() -> None:
     registry = LegacyFormulaRegistry()
     report = registry.evidence_report()
     certification = registry.certification()
-    assert report.authoritative_fields == ()
-    assert set(report.weak_fields) == {"commission_amount", "final_net_payable"}
-    assert certification.status == FormulaCertificationStatus.NOT_FOUND
-    assert not certification.production_ready
+    assert set(report.authoritative_fields) == set(registry.REQUIRED_FIELDS)
+    assert report.weak_fields == ()
+    assert {item.source_file for item in report.evidence} == {AUTHORITATIVE_SOURCE}
+    assert certification.status == FormulaCertificationStatus.CERTIFIED
+    assert certification.policy_version == POLICY_VERSION
+    assert certification.production_ready
+    assert certification.parity_cases == 0
 
 
 def test_authoritative_evidence_alone_does_not_certify() -> None:
@@ -206,6 +263,30 @@ def test_authoritative_evidence_alone_does_not_certify() -> None:
         reconciliation_difference=None,
     )
     assert certification.status == FormulaCertificationStatus.DISCOVERED
+    assert not certification.production_ready
+
+
+def test_weak_or_unapproved_evidence_cannot_certify() -> None:
+    weak = tuple(
+        LegacyFormulaEvidence(
+            financial_field=field,
+            formula="inferred formula",
+            evidence_source="prototype comment",
+            confidence=FormulaEvidenceConfidence.WEAK,
+        )
+        for field in LegacyFormulaRegistry.REQUIRED_FIELDS
+    )
+    certification = FormulaCertificationService(
+        LegacyFormulaRegistry.REQUIRED_FIELDS
+    ).certify(
+        evidence=weak,
+        parity_results=(),
+        policy_version=POLICY_VERSION,
+        policy_implemented=True,
+        implementation_validated=True,
+        reconciliation_difference=Decimal(0),
+    )
+    assert certification.status == FormulaCertificationStatus.NOT_FOUND
     assert not certification.production_ready
 
 
@@ -268,6 +349,66 @@ def test_parity_match_mismatch_no_reference_and_float_rejection() -> None:
         )
 
 
+def test_historical_chain_is_reconstructed_from_source_orders() -> None:
+    result = HistoricalParityEngine().reconstruct_and_compare(
+        reconstruction_case("chain"), SyntheticCertifiedPolicy()
+    )
+    chain = result.calculation_chain
+    assert result.reconstructed_from_source
+    assert result.mismatches == 0
+    assert result.total_absolute_difference == Decimal("0.00")
+    assert chain is not None
+    assert chain.partner_amount == Decimal("100.00")
+    assert chain.commission_base == Decimal("100.00")
+    assert chain.commission_amount == Decimal("20.00")
+    assert chain.invoice_ht == Decimal("20.00")
+    assert chain.invoice_tva == Decimal("4.00")
+    assert chain.invoice_ttc == Decimal("24.00")
+    assert chain.note_de_debours == Decimal("100.00")
+    assert chain.final_net_payable == Decimal("76.00")
+    assert [item.eligible_partner_amount for item in chain.order_calculations] == [
+        Decimal("60.00"),
+        Decimal("40.00"),
+        None,
+    ]
+
+
+def test_historical_reconstruction_is_optional_for_certification() -> None:
+    parity = HistoricalParityEngine()
+    certification = FormulaCertificationService(
+        LegacyFormulaRegistry.REQUIRED_FIELDS
+    ).certify(
+        evidence=authoritative_evidence(),
+        parity_results=(
+            parity.compare(parity_case("manual-1")),
+            parity.compare(parity_case("manual-2")),
+        ),
+        policy_version="synthetic_test_v1",
+        policy_implemented=True,
+        implementation_validated=True,
+        reconciliation_difference=Decimal("0.00"),
+    )
+    assert certification.status == FormulaCertificationStatus.CERTIFIED
+    assert certification.source_reconstructed_cases == 0
+    assert certification.production_ready
+
+
+def test_optional_historical_mismatch_is_reported_without_downgrading_policy() -> None:
+    parity = HistoricalParityEngine()
+    certification = FormulaCertificationService(
+        LegacyFormulaRegistry.REQUIRED_FIELDS
+    ).certify(
+        evidence=authoritative_evidence(),
+        parity_results=(parity.compare(parity_case("optional", mismatch=True)),),
+        policy_version="synthetic_test_v1",
+        policy_implemented=True,
+        implementation_validated=True,
+        reconciliation_difference=Decimal(0),
+    )
+    assert certification.parity_mismatches == 1
+    assert certification.status == FormulaCertificationStatus.CERTIFIED
+
+
 def test_certification_gate_and_parity_failure() -> None:
     assert certified().status == FormulaCertificationStatus.CERTIFIED
     parity = HistoricalParityEngine()
@@ -279,14 +420,28 @@ def test_certification_gate_and_parity_failure() -> None:
         ),
         policy_version="synthetic_test_v1",
         policy_implemented=True,
+        implementation_validated=True,
         reconciliation_difference=Decimal(0),
+        historical_parity_required=True,
     )
     assert failed.status == FormulaCertificationStatus.PARITY_FAILED
     assert not failed.production_ready
 
 
 def test_documents_stay_blocked_before_certification_and_unlock_after() -> None:
-    blocked = Phase8DocumentEngine().readiness(registered_restaurant(), settlement())
+    not_certified = FormulaCertificationService(
+        LegacyFormulaRegistry.REQUIRED_FIELDS
+    ).certify(
+        evidence=(),
+        parity_results=(),
+        policy_version=None,
+        policy_implemented=False,
+        reconciliation_difference=None,
+    )
+    blocked = Phase8DocumentEngine(
+        certification=not_certified,
+        policy=SyntheticCertifiedPolicy(),
+    ).readiness(registered_restaurant(), settlement())
     engine = Phase8DocumentEngine(
         certification=certified(),
         policy=SyntheticCertifiedPolicy(),
@@ -308,6 +463,84 @@ def test_documents_stay_blocked_before_certification_and_unlock_after() -> None:
     assert preview.content["final_net_payable"] == "76.00"
     assert preview.financial_policy_version == "synthetic_test_v1"
     assert calculated.financial_policy_version == "synthetic_test_v1"
+
+
+@pytest.mark.parametrize(
+    "rate", ["24", "24%", "24,0%", "0.24", Decimal("0.24")]
+)
+def test_authoritative_commission_rate_normalization(rate: object) -> None:
+    assert CashCoLegacyV1Policy().normalize_commission_rate(rate).value == Decimal(
+        "0.24"
+    )
+
+
+@pytest.mark.parametrize(
+    ("item_total", "rate", "expected"),
+    [
+        (
+            "120 MAD",
+            "20%",
+            ("120", "100", "20", "4", "24", "96"),
+        ),
+        (
+            "240 MAD",
+            "24%",
+            ("240", "200", "48", "9.6", "57.6", "182.4"),
+        ),
+    ],
+)
+def test_cashco_legacy_v1_authoritative_cases(
+    item_total: str,
+    rate: str,
+    expected: tuple[str, ...],
+) -> None:
+    result = CashCoLegacyV1Policy().calculate(item_total, rate)
+    assert (
+        result.sales_ttc,
+        result.sales_ht,
+        result.commission_ht,
+        result.tva,
+        result.invoice_ttc,
+        result.net_payable,
+    ) == tuple(Decimal(item) for item in expected)
+    assert result.tva_rate == TVA_RATE
+    assert result.policy_version == POLICY_VERSION
+    assert result.invoice_ttc == result.commission_ht + result.tva
+    assert result.tva == result.commission_ht * Decimal("0.20")
+    assert result.net_payable + result.invoice_ttc == result.sales_ttc
+
+
+def test_repeating_sales_ht_has_no_intermediate_rounding() -> None:
+    result = CashCoLegacyV1Policy().calculate("100", "17")
+    assert result.sales_ht == Decimal(100) / Decimal("1.2")
+    assert result.commission_ht == result.sales_ht * Decimal("0.17")
+    assert result.commission_ht != result.commission_ht.quantize(Decimal("0.01"))
+    assert result.display_value("commission_ht") == Decimal("14.17")
+
+
+def test_legacy_currency_normalization_and_zero_commission() -> None:
+    result = CashCoLegacyV1Policy().calculate("1 234,50 MAD", "0")
+    assert result.sales_ttc == Decimal("1234.50")
+    assert result.commission_rate == 0
+    assert result.commission_ht == 0
+    assert result.tva == 0
+    assert result.invoice_ttc == 0
+    assert result.net_payable == Decimal("1234.50")
+
+
+def test_presentation_and_amount_to_words_round_only_at_final_boundary() -> None:
+    result = CashCoLegacyV1Policy().calculate("1.005", "0")
+    assert result.sales_ttc == Decimal("1.005")
+    assert result.display_value("sales_ttc") == Decimal("1.00")
+    assert result.amount_to_words_value("sales_ttc") == Decimal("1.00")
+
+
+@pytest.mark.parametrize("value", [None, "", "not money", float("nan")])
+def test_legacy_invalid_money_defaults_to_zero_with_warning(value: object) -> None:
+    result = CashCoLegacyV1Policy().calculate(value, "20%")
+    assert result.sales_ttc == 0
+    assert result.data_quality_warnings
+    assert "DEFAULTED" in result.data_quality_warnings[0]
 
 
 def test_reference_import_profiles_without_retaining_values() -> None:

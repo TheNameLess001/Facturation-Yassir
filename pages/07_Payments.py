@@ -38,9 +38,19 @@ for settlement in workspace.summary.restaurants:
             "Restaurant": restaurant.restaurant_name,
             "Restaurant ID": settlement.restaurant_id,
             "Period": period_code,
-            "Payment Readiness": "MISSING RIB" if not restaurant.rib else "FORMULA BLOCKED",
+            "Payment Readiness": (
+                "MISSING RIB"
+                if not restaurant.rib
+                else "READY FOR FUTURE PAYMENT"
+                if settlement.net_payable is not None
+                else "FINANCIAL REVIEW"
+            ),
             "RIB Status": "AVAILABLE · MASKED" if restaurant.rib else "MISSING",
-            "Net Payable Status": "NOT VALIDATED",
+            "Net Payable Status": (
+                "VALIDATED · cashco_legacy_v1"
+                if settlement.net_payable is not None
+                else "NOT CALCULABLE"
+            ),
             "Payment Status": "NOT STARTED",
         }
     )
@@ -48,9 +58,16 @@ render_kpis(
     [
         ("Restaurants", f"{len(rows):,}", "Identity-ready registry"),
         ("RIB Available", f"{sum(row['RIB Status'].startswith('AVAILABLE') for row in rows):,}", "Values remain masked"),
-        ("Net Payable Validated", "0", "Legacy formula gate"),
+        (
+            "Net Payable Validated",
+            f"{sum(row['Net Payable Status'].startswith('VALIDATED') for row in rows):,}",
+            "cashco_legacy_v1",
+        ),
         ("Payments Started", "0", "Out of scope for this phase"),
     ]
 )
 st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
-st.warning("Net Payable: NOT VALIDATED · No amount or bank action is produced.")
+st.warning(
+    "Net payable is formula-certified where settlement inputs are ready. "
+    "No bank reconciliation or payment action is implemented."
+)

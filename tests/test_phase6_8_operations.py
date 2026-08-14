@@ -178,6 +178,12 @@ def test_latest_override_recomputes_final_decision_and_settlement(tmp_path) -> N
     assert order.final_financial_decision == FinancialDecision.PAY_PARTNER
     assert order.manual_override_applied is True
     assert after.restaurants[0].settlement_status == RestaurantSettlementStatus.READY
+    settlement = after.restaurants[0]
+    assert settlement.financial_policy_version == "cashco_legacy_v1"
+    assert settlement.sales_ttc == Decimal("100.00")
+    assert settlement.sales_ht == Decimal("100.00") / Decimal("1.2")
+    assert settlement.invoice_ttc == settlement.commission_amount + settlement.invoice_tva
+    assert settlement.net_payable + settlement.invoice_ttc == settlement.sales_ttc
     assert after.money_reconciliation[0].difference == 0
 
 
@@ -199,9 +205,9 @@ def test_commission_resolution_uses_scope_authority() -> None:
 
 def test_legacy_formula_gate_and_parity_statuses() -> None:
     registry = LegacyFormulaRegistry()
-    assert registry.production_ready() is False
+    assert registry.production_ready() is True
     assert all(
-        item.confidence != FormulaEvidenceConfidence.AUTHORITATIVE
+        item.confidence == FormulaEvidenceConfidence.AUTHORITATIVE
         for item in registry.discover()
     )
     blocked = registry.compare(
@@ -257,7 +263,7 @@ def test_authoritative_evidence_is_required_for_every_formula() -> None:
     assert formula_registry.production_ready(complete) is False
 
 
-def test_document_readiness_preview_and_versioning_are_formula_gated(tmp_path) -> None:
+def test_document_readiness_preview_uses_certified_policy(tmp_path) -> None:
     repository = FinancialOverrideRepository(tmp_path / "overrides.sqlite3")
     override, _ = FinancialOverrideService(repository).create(
         period_code="2026-07-P2",
@@ -282,12 +288,13 @@ def test_document_readiness_preview_and_versioning_are_formula_gated(tmp_path) -
         version=2,
         generated_at=datetime(2026, 8, 12, tzinfo=UTC),
     )
-    assert readiness.status == DocumentReadinessStatus.FORMULA_NOT_VALIDATED
+    assert readiness.status == DocumentReadinessStatus.READY
     assert readiness.potentially_eligible is True
     assert preview.document_key == "R1:2026-07-P2:INVOICE:v2"
-    assert preview.watermark == "DRAFT · NOT VALIDATED"
-    assert preview.content["invoice_ttc"] is None
-    assert b"NOT VALIDATED" in engine.render_local_preview(preview)
+    assert preview.watermark == "DRAFT"
+    assert preview.content["invoice_ttc"] == "20.00"
+    assert preview.content["final_net_payable"] == "80.00"
+    assert b"cashco_legacy_v1" in engine.render_local_preview(preview)
 
 
 def test_document_readiness_distinguishes_financial_and_legal_blockers() -> None:

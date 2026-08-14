@@ -158,6 +158,8 @@ class RestaurantSettlementEvaluation(Phase5Model):
     eligible_partner_amount: Decimal
     excluded_amount: Decimal
     compensation_amount: Decimal
+    sales_ttc: Decimal | None = None
+    sales_ht: Decimal | None = None
     commission_base: Decimal | None = None
     commission_amount: Decimal | None = None
     invoice_ht: Decimal | None = None
@@ -216,27 +218,21 @@ class LegacyCalculationPolicy(Phase5Model):
     @classmethod
     def repository_audit_result(cls) -> LegacyCalculationPolicy:
         return cls(
-            identified=False,
-            source_reference="Initial repository settlement prototype",
-            authoritative=False,
+            identified=True,
+            source_reference="4_Generateur bulk.py · business-owner approved",
+            authoritative=True,
             prototype_formulas={
-                "payable": "PAY_PARTNER and YASSIR_COMPENSATION order amount sum",
-                "commission": "payable * commission_rate, ROUND_HALF_UP to 0.01",
-                "net_payable": "payable - commission + adjustment, ROUND_HALF_UP to 0.01",
+                "sales_ttc": "Item total",
+                "sales_ht": "sales_ttc / 1.2",
+                "commission_ht": "sales_ht * normalized commission rate",
+                "tva": "commission_ht * 0.20",
+                "invoice_ttc": "commission_ht + tva",
+                "net_payable": "sales_ttc - invoice_ttc",
             },
-            unavailable_outputs=(
-                "commission_base",
-                "commission_amount",
-                "invoice_ht",
-                "invoice_tva",
-                "invoice_ttc",
-                "disbursement_note",
-                "net_payable",
-            ),
+            unavailable_outputs=(),
             note=(
-                "No authoritative legacy implementation for HT, TVA, TTC, note de "
-                "débours, or final net payable exists in the repository or its Git "
-                "history. Those values must not be invented."
+                "Monetary policy cashco_legacy_v1 reproduces the explicitly approved "
+                "legacy production generator without intermediate rounding."
             ),
         )
 

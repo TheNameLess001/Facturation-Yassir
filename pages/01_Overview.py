@@ -72,7 +72,7 @@ render_kpis(
         ("Settlement Ready", f"{snapshot.settlement_ready:,}", "No financial input blocker"),
         ("Orders Evaluated", f"{snapshot.orders_evaluated:,}", "Canonical orders only"),
         ("Manual Review", f"{snapshot.manual_review:,}", f"{snapshot.overrides_applied:,} overrides applied"),
-        ("Documents Ready", f"{snapshot.documents_ready:,}", "Legacy formula gate active"),
+        ("Documents Ready", f"{snapshot.documents_ready:,}", "Non-formula gates applied"),
     ]
 )
 render_kpis(
@@ -140,7 +140,7 @@ render_alerts(
         ("Commission Mismatches", f"{snapshot.commission_mismatches:,}", "violet"),
         ("Invalid Financial Rows", f"{snapshot.invalid_financial_rows:,}", "coral"),
         ("Missing Legal Data", f"{snapshot.missing_legal_data:,}", "violet"),
-        ("Formula Validation Required", f"{snapshot.formula_validation_required:,}", "coral"),
+        ("Formula Blockers", f"{snapshot.formula_validation_required:,}", "green"),
         ("Missing / Invalid Email", f"{email_snapshot.missing_email + email_snapshot.invalid_email:,}", "coral"),
         ("Failed Sends", f"{email_snapshot.failed:,}", "coral"),
     ]
