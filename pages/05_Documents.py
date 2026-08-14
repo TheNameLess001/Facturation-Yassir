@@ -8,6 +8,10 @@ import pandas as pd
 import streamlit as st
 
 from src.config import get_settings
+from src.documents.legal_readiness import (
+    DocumentLegalPolicy,
+    DocumentLegalStatus,
+)
 from src.documents.phase8 import (
     CashCoDocumentType,
     DocumentReadinessStatus,
@@ -87,6 +91,57 @@ def document_preview_dialog(restaurant, settlement) -> None:
     )
 
 
+@st.dialog("Legal data review", width="large")
+def legal_review_dialog(restaurant, settlement) -> None:
+    policy = DocumentLegalPolicy()
+    results = policy.evaluate_package(restaurant)
+    st.markdown(f"### {restaurant.restaurant_name or restaurant.restaurant_id}")
+    st.caption(
+        f"{restaurant.restaurant_id} · Canonical identity · Read-only source diagnostics"
+    )
+    for result in results:
+        st.markdown(f"#### {result.document_type.value} · {result.status.value}")
+        st.write(
+            {
+                "Partner Name": result.document_partner_name,
+                "Name Source": (
+                    result.document_partner_name_source.value
+                    if result.document_partner_name_source
+                    else "MISSING"
+                ),
+                "Required": ", ".join(result.required_fields),
+                "Missing Required": ", ".join(result.missing_required_fields) or "None",
+                "Optional Missing": ", ".join(result.optional_missing_fields) or "None",
+            }
+        )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Field": item.field,
+                        "Value": item.value,
+                        "Source": item.source or "NOT AVAILABLE",
+                        "Requirement": "REQUIRED" if item.required else "OPTIONAL",
+                        "Validation": item.status.value,
+                    }
+                    for item in result.field_traces
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+    readiness = Phase8DocumentEngine().readiness(restaurant, settlement)
+    st.write(
+        {
+            "Financial Status": settlement.settlement_status.value,
+            "Financial Policy": settlement.financial_policy_version,
+            "Document Readiness": readiness.status.value,
+            "Drive Publishing": Phase8DocumentEngine.DRIVE_PUBLISHING_STATUS,
+        }
+    )
+    st.caption("No source field can be edited from this review dialog.")
+
+
 page_setup("Documents")
 st.title("Document Engine")
 st.caption("Versioned previews · Legacy formula hard gate · No Drive creation")
@@ -126,6 +181,17 @@ readiness = {
     restaurant_id: engine.readiness(restaurant, settlements[restaurant_id])
     for restaurant_id, restaurant in restaurants.items()
 }
+document_candidates = {
+    restaurant_id: {
+        document_type: engine.production_candidate(
+            document_type,
+            restaurants[restaurant_id],
+            settlements[restaurant_id],
+        )
+        for document_type in CashCoDocumentType
+    }
+    for restaurant_id in restaurants
+}
 render_kpis(
     [
         (
@@ -158,13 +224,19 @@ rows = [
         "Restaurant": restaurants[restaurant_id].restaurant_name,
         "Restaurant ID": restaurant_id,
         "Period": period_code,
-        "Invoice": "DRAFT PREVIEW",
-        "Note de débours": "DRAFT PREVIEW",
-        "Statement": "DRAFT PREVIEW",
+        "Invoice": document_candidates[restaurant_id][
+            CashCoDocumentType.INVOICE
+        ].status.value,
+        "Note de débours": document_candidates[restaurant_id][
+            CashCoDocumentType.NOTE_DE_DEBOURS
+        ].status.value,
+        "Statement": document_candidates[restaurant_id][
+            CashCoDocumentType.PARTNER_STATEMENT
+        ].status.value,
         "Financial Validation": (
             "READY" if item.settlement_final else "REVIEW"
         ),
-        "Legal Readiness": "READY" if item.legal_ready else "MISSING",
+        "Legal Readiness": item.legal_status.value,
         "Status": item.status.value,
     }
     for restaurant_id, item in readiness.items()
@@ -180,6 +252,119 @@ event = st.dataframe(
 if event.selection.rows:
     selected = rows[event.selection.rows[0]]["Restaurant ID"]
     document_preview_dialog(restaurants[selected], settlements[selected])
+
+st.markdown("### Legal Data Review")
+legal_policy = DocumentLegalPolicy()
+legal_results = {
+    restaurant_id: legal_policy.evaluate_package(restaurant)
+    for restaurant_id, restaurant in restaurants.items()
+}
+
+
+def package_legal_status(results):
+    if any(item.status == DocumentLegalStatus.BLOCKED for item in results):
+        return DocumentLegalStatus.BLOCKED
+    if any(item.status == DocumentLegalStatus.READY_WITH_WARNINGS for item in results):
+        return DocumentLegalStatus.READY_WITH_WARNINGS
+    return DocumentLegalStatus.READY
+
+
+package_statuses = {
+    restaurant_id: package_legal_status(results)
+    for restaurant_id, results in legal_results.items()
+}
+render_kpis(
+    [
+        (
+            "Document Candidates",
+            f"{sum(item.financial_policy_version == 'cashco_legacy_v1' for item in settlements.values()):,}",
+            "Financially calculable",
+        ),
+        (
+            "Legal Ready",
+            f"{sum(item == DocumentLegalStatus.READY for item in package_statuses.values()):,}",
+            "No legal warning",
+        ),
+        (
+            "Ready With Warnings",
+            f"{sum(item == DocumentLegalStatus.READY_WITH_WARNINGS for item in package_statuses.values()):,}",
+            "Approved optional fields",
+        ),
+        (
+            "Legal Blocked",
+            f"{sum(item == DocumentLegalStatus.BLOCKED for item in package_statuses.values()):,}",
+            "Missing required field",
+        ),
+        (
+            "Missing Address",
+            f"{sum(not item.address for item in restaurants.values()):,}",
+            "Blocking for Invoice / Débours",
+        ),
+        (
+            "Missing ICE",
+            f"{sum(not item.ice for item in restaurants.values()):,}",
+            "Optional warning",
+        ),
+        (
+            "Missing Raison Sociale",
+            f"{sum(not item.legal_entity for item in restaurants.values()):,}",
+            "Restaurant Name fallback",
+        ),
+        (
+            "Invalid Legal Fields",
+            f"{sum(any(result.invalid_fields for result in results) for results in legal_results.values()):,}",
+            "Visible diagnostic",
+        ),
+    ]
+)
+legal_rows = []
+for restaurant_id, restaurant in restaurants.items():
+    by_type = {item.document_type: item for item in legal_results[restaurant_id]}
+    invoice_legal = by_type[CashCoDocumentType.INVOICE]
+    blockers = tuple(
+        dict.fromkeys(
+            field
+            for item in by_type.values()
+            for field in item.missing_required_fields
+        )
+    )
+    legal_rows.append(
+        {
+            "Restaurant": restaurant.restaurant_name,
+            "Restaurant ID": restaurant_id,
+            "City": restaurant.city,
+            "Partner Name": invoice_legal.document_partner_name,
+            "Name Source": (
+                invoice_legal.document_partner_name_source.value
+                if invoice_legal.document_partner_name_source
+                else "MISSING"
+            ),
+            "Address": restaurant.address,
+            "ICE": restaurant.ice or "MISSING",
+            "IF": restaurant.if_number or "MISSING",
+            "RC": restaurant.rc or "MISSING",
+            "RIB Status": "AVAILABLE · MASKED" if restaurant.rib else "MISSING",
+            "Invoice Legal Status": by_type[CashCoDocumentType.INVOICE].status.value,
+            "Débours Legal Status": by_type[
+                CashCoDocumentType.NOTE_DE_DEBOURS
+            ].status.value,
+            "Statement Legal Status": by_type[
+                CashCoDocumentType.PARTNER_STATEMENT
+            ].status.value,
+            "Blocking Fields": " · ".join(blockers) or "None",
+        }
+    )
+legal_event = st.dataframe(
+    pd.DataFrame(legal_rows),
+    hide_index=True,
+    width="stretch",
+    on_select="rerun",
+    selection_mode="single-row",
+    key="legal_data_review_table",
+)
+if legal_event.selection.rows:
+    selected = legal_rows[legal_event.selection.rows[0]]["Restaurant ID"]
+    legal_review_dialog(restaurants[selected], settlements[selected])
 
 st.markdown("### Financial Formula Certification")
 formula_registry = LegacyFormulaRegistry()

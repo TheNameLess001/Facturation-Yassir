@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from src.documents.legal_readiness import DocumentLegalPolicy, DocumentLegalStatus
 from src.google.exceptions import GoogleIntegrationError
 from src.restaurants.registry_models import MappingStatus, RegisteredRestaurant
 from src.restaurants.registry_runtime import run_restaurant_registry
@@ -23,6 +24,17 @@ def mask_rib(value: str | None) -> str:
 
 @st.dialog("Restaurant details", width="large")
 def restaurant_dialog(restaurant: RegisteredRestaurant) -> None:
+    legal_results = DocumentLegalPolicy().evaluate_package(restaurant)
+    legal_status = (
+        DocumentLegalStatus.BLOCKED
+        if any(item.status == DocumentLegalStatus.BLOCKED for item in legal_results)
+        else DocumentLegalStatus.READY_WITH_WARNINGS
+        if any(
+            item.status == DocumentLegalStatus.READY_WITH_WARNINGS
+            for item in legal_results
+        )
+        else DocumentLegalStatus.READY
+    )
     st.markdown(f"### {restaurant.restaurant_name or 'Unnamed restaurant'}")
     st.caption(
         f"Restaurant ID: {restaurant.restaurant_id or 'Missing'} · "
@@ -50,7 +62,7 @@ def restaurant_dialog(restaurant: RegisteredRestaurant) -> None:
                 "Identity": "READY" if restaurant.readiness.identity_ready else "BLOCKING",
                 "Orders": "AVAILABLE" if restaurant.readiness.orders_available else "NONE AVAILABLE",
                 "Settlement": "NOT EVALUATED",
-                "Documents": "READY" if restaurant.readiness.document_ready else "MISSING LEGAL",
+                "Documents": legal_status.value,
                 "Email": "READY" if restaurant.readiness.email_ready else "MISSING",
                 "Payment": "READY" if restaurant.readiness.payment_ready else "MISSING RIB",
             }
@@ -93,6 +105,7 @@ def restaurant_dialog(restaurant: RegisteredRestaurant) -> None:
                 "Invoice Scope row": restaurant.scope_source_row,
                 "RST reference": restaurant.rst_source_reference,
                 "Mapping method": restaurant.mapping_method,
+                "Field sources": restaurant.field_sources,
             }
         )
     with orders:
@@ -127,6 +140,23 @@ except (GoogleIntegrationError, ValueError, OSError) as exc:
     st.stop()
 
 restaurants = list(registry.restaurants)
+legal_policy = DocumentLegalPolicy()
+legal_statuses = {
+    item.restaurant_id: (
+        DocumentLegalStatus.BLOCKED
+        if any(
+            result.status == DocumentLegalStatus.BLOCKED
+            for result in legal_policy.evaluate_package(item)
+        )
+        else DocumentLegalStatus.READY_WITH_WARNINGS
+        if any(
+            result.status == DocumentLegalStatus.READY_WITH_WARNINGS
+            for result in legal_policy.evaluate_package(item)
+        )
+        else DocumentLegalStatus.READY
+    )
+    for item in restaurants
+}
 render_kpis(
     [
         ("Invoice Scope Restaurants", f"{len(restaurants):,}", "Distinct active scope entries"),
@@ -141,7 +171,11 @@ render_kpis(
         ("Without Orders", f"{sum(not item.admin_orders_available for item in restaurants):,}", "Still remains in Invoice Scope"),
         ("Missing Email", f"{registry.issue_count('MISSING_EMAIL'):,}", "Future EMAIL_READY issue"),
         ("Missing RIB", f"{registry.issue_count('MISSING_RIB'):,}", "Future payment issue"),
-        ("Missing Legal Data", f"{registry.issue_count('MISSING_LEGAL_ENTITY'):,}", "Future document issue"),
+        (
+            "Legal Blocked",
+            f"{sum(item == DocumentLegalStatus.BLOCKED for item in legal_statuses.values()):,}",
+            "Missing required document field",
+        ),
     ]
 )
 
@@ -209,7 +243,11 @@ if missing_email:
 if missing_rib:
     filtered = [item for item in filtered if "MISSING_RIB" in item.issue_codes]
 if missing_legal:
-    filtered = [item for item in filtered if "MISSING_LEGAL_ENTITY" in item.issue_codes]
+    filtered = [
+        item
+        for item in filtered
+        if legal_statuses.get(item.restaurant_id) == DocumentLegalStatus.BLOCKED
+    ]
 
 st.markdown(
     f'<div class="cc-section">Restaurants · {len(filtered):,}</div>',
@@ -226,7 +264,9 @@ table = pd.DataFrame(
             "AM": item.account_manager,
             "Identity": "READY" if item.readiness.identity_ready else "BLOCKING",
             "Orders": "AVAILABLE" if item.readiness.orders_available else "NONE",
-            "Documents": "READY" if item.readiness.document_ready else "MISSING LEGAL",
+            "Documents": legal_statuses.get(
+                item.restaurant_id, DocumentLegalStatus.BLOCKED
+            ).value,
             "Email": "READY" if item.readiness.email_ready else "MISSING",
             "Payment": "READY" if item.readiness.payment_ready else "MISSING RIB",
             "Mapping Status": item.mapping_status.value,

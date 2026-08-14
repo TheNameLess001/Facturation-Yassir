@@ -9,7 +9,11 @@ from src.models.enums import DocumentStatus, WorkflowState
 
 def restaurant() -> Restaurant:
     return Restaurant(
-        restaurant_id="R-1", restaurant_name="One", legal_entity="One SARL", ice="ICE1"
+        restaurant_id="R-1",
+        restaurant_name="One",
+        legal_entity="One SARL",
+        ice="ICE1",
+        address="1 Approved Address",
     )
 
 

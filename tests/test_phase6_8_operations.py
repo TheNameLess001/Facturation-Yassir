@@ -314,13 +314,10 @@ def test_document_readiness_distinguishes_financial_and_legal_blockers() -> None
     )
     assert financial.status == DocumentReadinessStatus.FINANCIAL_REVIEW
     assert missing_legal.status == DocumentReadinessStatus.MISSING_LEGAL
-    assert set(missing_legal.missing_legal_fields) == {
-        "Legal Entity",
-        "ICE",
-        "IF",
-        "RC",
-        "Address",
-    }
+    assert missing_legal.missing_legal_fields == ("address",)
+    assert missing_legal.legal_status.value == "BLOCKED"
+    assert "OPTIONAL_MISSING_LEGAL_ENTITY" in missing_legal.issue_codes
+    assert "OPTIONAL_MISSING_ICE" in missing_legal.issue_codes
 
 
 def test_dashboard_snapshot_trend_alerts_and_progress() -> None:

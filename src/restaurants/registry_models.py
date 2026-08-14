@@ -242,6 +242,7 @@ class RegisteredRestaurant(BaseModel):
     canonical_order_count: int = 0
     admin_restaurant_name: str | None = None
     issue_codes: tuple[str, ...] = ()
+    field_sources: dict[str, str] = Field(default_factory=dict)
     readiness: RestaurantReadiness
 
 

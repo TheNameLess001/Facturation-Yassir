@@ -186,6 +186,22 @@ The Documents workbench accepts local PDF, CSV, and Excel references for memory-
 
 The local reference importer and source-order reconstruction engine remain available for optional future regression cases. They are not a prerequisite for the approved monetary policy. Existing Phase 5 order eligibility and cancellation decisions remain unchanged and separate from this monetary certification.
 
+## Production Activation 3 — legal and document readiness
+
+Document legal readiness is defined per document type from the approved behavior of `4_Generateur bulk.py`; CashCo no longer applies one global Raison Sociale + ICE + IF + RC + Address gate. The production recipient name uses Raison Sociale when available and otherwise the canonical Restaurant Name, with `LEGAL_ENTITY` or `RESTAURANT_NAME_FALLBACK` recorded explicitly. No value is fabricated.
+
+- Commission Invoice requires a nonblank document partner name and a real partner address.
+- Note de débours requires a nonblank document partner name and a real partner address.
+- Partner Statement requires a nonblank document partner name; address remains an optional warning.
+- ICE, IF, and RC remain visible completeness/quality diagnostics but are not mandatory under the approved legacy template. ICE accepts only safe whitespace/hyphen normalization and validates as 15 digits.
+- RIB is payment data. It is masked in the UI and never blocks Invoice, note de débours, or Statement readiness.
+
+Every populated legal field carries a source trace tied to the canonical Restaurant ID. Values come from RST List enrichment, with the existing Invoice Scope fallback only where the registry already defines it. There is no fuzzy legal-entity matching and no borrowing from another restaurant.
+
+The production document validator builds immutable, versioned candidates for `INVOICE`, `NOTE_DE_DEBOURS`, and `PARTNER_STATEMENT`. Each binds `restaurant_id`, `period_code`, document type/version, `cashco_legacy_v1`, a settlement snapshot hash, content hash, legal result, and the exact certified financial values. `READY_WITH_WARNINGS` is production-acceptable only for approved optional fields; missing required fields, financial review, invalid financial data, or unresolved commission retain a draft watermark. A changed version produces a different document identity and content hash.
+
+Validated candidates are generated in memory/local preview only. Automatic Drive publishing remains `DRIVE_PUBLISHING_NOT_CONFIGURED`; no `files.create` probe or source mutation is performed. Email package readiness may become true independently of Gmail capability, while automation and production SEND remain disabled.
+
 ## Source discovery boundary
 
 The Data Sources page validates the real service-account connection, checks each active configured Drive location independently, inventories Admin Earnings sources, and maintains a metadata manifest. Overall readiness depends on Google authentication, Admin Earnings, Invoice Scope, RST List, and the required CashCo workspace folders. Finance Tracking has no effect. Settlement evaluation is read-only and in memory. Document preview is local and gated; no Google restaurant Sheet, Drive document publication, email, or payment workflow is enabled.

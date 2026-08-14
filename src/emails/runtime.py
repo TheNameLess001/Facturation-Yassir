@@ -8,11 +8,11 @@ from src.documents.phase8 import (
     CashCoDocumentType,
     DocumentReadinessStatus,
     Phase8DocumentEngine,
+    ProductionDocumentStatus,
 )
 from src.emails.packages import (
     PartnerEmailPackageFactory,
     resolve_recipient,
-    stable_hash,
 )
 from src.emails.phase10_authorization import PeriodAuthorizationService
 from src.emails.phase10_models import (
@@ -108,28 +108,29 @@ def build_email_center_snapshot(
         if restaurant is None:
             continue
         document_readiness = document_engine.readiness(restaurant, settlement)
+        document_candidates = tuple(
+            document_engine.production_candidate(
+                document_type,
+                restaurant,
+                settlement,
+            )
+            for document_type in CashCoDocumentType
+        )
         document_refs = tuple(
             DocumentAttachmentRef(
-                document_type=document_type.value,
+                document_type=candidate.document_type.value,
                 document_id=str(
                     uuid5(
                         NAMESPACE_URL,
                         f"{settlement.period_code}:{settlement.restaurant_id}:"
-                        f"{document_type.value}:v1",
+                        f"{candidate.document_type.value}:v{candidate.document_version}",
                     )
                 ),
-                version=1,
-                content_hash=stable_hash(
-                    {
-                        "restaurant_id": settlement.restaurant_id,
-                        "period": settlement.period_code,
-                        "type": document_type.value,
-                        "status": "DRAFT_NOT_VALIDATED",
-                    }
-                ),
-                status="DRAFT_NOT_VALIDATED",
+                version=candidate.document_version,
+                content_hash=candidate.content_hash,
+                status=candidate.status.value,
             )
-            for document_type in CashCoDocumentType
+            for candidate in document_candidates
         )
         package = package_factory.create(
             period_code=settlement.period_code,
@@ -159,6 +160,10 @@ def build_email_center_snapshot(
                 legal_data_ready=document_readiness.legal_ready,
                 document_ready=(
                     document_readiness.status == DocumentReadinessStatus.READY
+                    and all(
+                        item.status == ProductionDocumentStatus.PRODUCTION_READY
+                        for item in document_candidates
+                    )
                 ),
                 email_status=recipient.status,
                 admin_authorized=active_authorization is not None,

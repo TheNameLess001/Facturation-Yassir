@@ -204,6 +204,8 @@ class RestaurantRegistryBuilder:
                 restaurant_issues,
                 order_counts,
                 order_names,
+                scope_mapping,
+                rst_mapping,
             )
             restaurants.append(result)
             needs_review = (
@@ -534,6 +536,8 @@ class RestaurantRegistryBuilder:
         issues,
         order_counts,
         order_names,
+        scope_mapping,
+        rst_mapping,
     ):
         chosen = mapped or {}
         restaurant_id = chosen.get("restaurant_id") or source["restaurant_id"]
@@ -549,6 +553,46 @@ class RestaurantRegistryBuilder:
                 MappingStatus.MATCHED_BY_ALIAS,
             }
         )
+        field_sources: dict[str, str] = {}
+        for field in (
+            "restaurant_id",
+            "restaurant_name",
+            "chain",
+            "legal_entity",
+            "ice",
+            "if_number",
+            "rc",
+            "rib",
+            "bank",
+            "address",
+            "email",
+            "finance_email",
+            "phone",
+            "city",
+            "area",
+            "account_manager",
+            "commission_rate",
+        ):
+            if chosen.get(field) is not None:
+                column = rst_mapping.get(field, "UNMAPPED_COLUMN")
+                field_sources[field] = (
+                    f"RST_LIST:{column}:row_{chosen.get('source_row')}"
+                )
+        for field in (
+            "restaurant_id",
+            "restaurant_name",
+            "city",
+            "area",
+            "phone",
+            "email",
+            "commission_rate",
+        ):
+            if field in field_sources or source.get(field) is None:
+                continue
+            column = scope_mapping.get(field, "UNMAPPED_COLUMN")
+            field_sources[field] = (
+                f"INVOICE_SCOPE:{column}:row_{source.get('source_row')}"
+            )
         return RegisteredRestaurant(
             restaurant_id=restaurant_id,
             restaurant_name=chosen.get("restaurant_name") or source["restaurant_name"],
@@ -583,6 +627,7 @@ class RestaurantRegistryBuilder:
             canonical_order_count=count,
             admin_restaurant_name=order_names.get(str(restaurant_id)),
             issue_codes=issue_codes,
+            field_sources=field_sources,
             readiness=RestaurantReadiness(
                 identity_ready=identity_ready,
                 orders_available=count > 0,

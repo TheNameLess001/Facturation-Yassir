@@ -35,6 +35,13 @@ class DocumentRenderer:
             "document_number": number,
             "restaurant_id": restaurant.restaurant_id,
             "restaurant_name": restaurant.restaurant_name,
+            "document_partner_name": restaurant.legal_entity
+            or restaurant.restaurant_name,
+            "document_partner_name_source": (
+                "LEGAL_ENTITY"
+                if restaurant.legal_entity
+                else "RESTAURANT_NAME_FALLBACK"
+            ),
             "legal_entity": restaurant.legal_entity,
             "ice": restaurant.ice,
             "period_id": settlement.period_id,
@@ -69,8 +76,8 @@ class DocumentService:
             raise PermissionError("PERIOD_LOCKED")
         if settlement.state != WorkflowState.VALIDATED:
             raise PermissionError("Documents require a validated settlement")
-        if not restaurant.legal_entity or not restaurant.ice:
-            raise ValueError("Legal entity and ICE are required")
+        if not restaurant.restaurant_name or not restaurant.address:
+            raise ValueError("Partner name and address are required")
         result: list[tuple[Document, bytes]] = []
         finance_hash = financial_hash(settlement)
         previous = self.registry.list_for_settlement(

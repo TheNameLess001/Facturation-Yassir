@@ -21,6 +21,7 @@ def restaurant() -> Restaurant:
         restaurant_name="One",
         legal_entity="One SARL",
         ice="ICE",
+        address="1 Approved Address",
         email="partner@example.com",
     )
 
