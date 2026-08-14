@@ -17,6 +17,10 @@ from src.google.exceptions import GoogleIntegrationError
 from src.settlement.legacy_validation import LegacyFormulaRegistry
 from src.settlement.periods import SettlementPeriodService
 from src.settlement.phase5_runtime import load_phase5_workspace
+from src.settlement.reference_import import (
+    HistoricalReferenceImporter,
+    ReferenceArtifactType,
+)
 from src.ui.layout import page_setup, render_kpis
 
 
@@ -174,8 +178,21 @@ if event.selection.rows:
     selected = rows[event.selection.rows[0]]["Restaurant ID"]
     document_preview_dialog(restaurants[selected], settlements[selected])
 
-st.markdown("### Legacy Parity Workbench")
-evidence = LegacyFormulaRegistry().discover()
+st.markdown("### Financial Formula Certification")
+formula_registry = LegacyFormulaRegistry()
+report = formula_registry.evidence_report()
+certification = formula_registry.certification()
+render_kpis(
+    [
+        ("Policy Version", certification.policy_version or "NOT ASSIGNED", "No production policy"),
+        ("Evidence", "NOT FOUND", "Authoritative evidence only"),
+        ("Parity Cases", str(certification.parity_cases), "Multiple cases required"),
+        ("Matches", str(certification.parity_matches), "Exact legacy precision"),
+        ("Mismatches", str(certification.parity_mismatches), "Never silently tolerated"),
+        ("Certification", certification.status.value, "Production hard gate"),
+    ]
+)
+evidence = report.evidence
 st.dataframe(
     pd.DataFrame(
         [
@@ -186,6 +203,7 @@ st.dataframe(
                 "Source": item.source_file,
                 "Location": item.source_location,
                 "Confidence": item.confidence.value,
+                "Category": item.category.value if item.category else "—",
                 "Status": "FORMULA_NOT_VALIDATED",
             }
             for item in evidence
@@ -198,4 +216,58 @@ st.caption(
     "Legacy expected amounts can be compared after an authoritative reference is supplied. "
     "No 0.005 MAD ingestion tolerance is applied to document parity."
 )
+
+with st.expander("Import a local historical reference · no persistence"):
+    st.caption(
+        "PDFs are accepted for later human review without OCR. Structured CSV/Excel "
+        "references are profiled by schema and row count; row values are not retained."
+    )
+    uploaded = st.file_uploader(
+        "Reference document",
+        type=["pdf", "csv", "xlsx", "xls"],
+        accept_multiple_files=False,
+    )
+    pdf_kind = st.selectbox(
+        "PDF reference type",
+        [
+            ReferenceArtifactType.PDF_INVOICE,
+            ReferenceArtifactType.PDF_NOTE_DE_DEBOURS,
+        ],
+        format_func=lambda item: item.value,
+    )
+    if uploaded is not None:
+        try:
+            profile = HistoricalReferenceImporter().inspect(
+                uploaded.name,
+                uploaded.getvalue(),
+                pdf_type=pdf_kind,
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            st.write(
+                {
+                    "Filename": profile.filename,
+                    "Type": profile.artifact_type.value,
+                    "Status": profile.status.value,
+                    "Size": profile.size,
+                    "SHA-256": profile.content_sha256,
+                    "Sheets": len(profile.sheets),
+                }
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Sheet": sheet.name,
+                            "Columns": " · ".join(sheet.columns),
+                            "Rows": sheet.row_count,
+                        }
+                        for sheet in profile.sheets
+                    ]
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+            st.success("Inspected in memory. Nothing was uploaded to Drive or committed.")
 st.warning("AUTOMATION OFF · No document implies Admin authorization")

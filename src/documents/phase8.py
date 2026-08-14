@@ -8,7 +8,12 @@ from typing import ClassVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.restaurants.registry_models import RegisteredRestaurant
-from src.settlement.legacy_validation import LegacyFormulaRegistry
+from src.settlement.certified_calculator import CertifiedFinancialCalculator
+from src.settlement.legacy_validation import (
+    FinancialFormulaCertification,
+    LegacyCalculationPolicy,
+    LegacyFormulaRegistry,
+)
 from src.settlement.phase5_models import (
     RestaurantSettlementEvaluation,
     RestaurantSettlementStatus,
@@ -57,6 +62,7 @@ class DocumentPreview(BaseModel):
     generated_at: datetime
     readiness: DocumentReadiness
     content: dict[str, str | None]
+    financial_policy_version: str | None = None
 
 
 class Phase8DocumentEngine:
@@ -68,8 +74,23 @@ class Phase8DocumentEngine:
         "address": "Address",
     }
 
-    def __init__(self, formulas: LegacyFormulaRegistry | None = None) -> None:
+    def __init__(
+        self,
+        formulas: LegacyFormulaRegistry | None = None,
+        *,
+        certification: FinancialFormulaCertification | None = None,
+        policy: LegacyCalculationPolicy | None = None,
+    ) -> None:
         self.formulas = formulas or LegacyFormulaRegistry()
+        self.certification = certification
+        self.policy = policy
+
+    def financial_formulas_ready(self) -> bool:
+        return bool(
+            self.certification
+            and self.certification.production_ready
+            and self.policy is not None
+        )
 
     def readiness(
         self,
@@ -81,7 +102,7 @@ class Phase8DocumentEngine:
             for field, label in self.LEGAL_FIELDS.items()
             if not getattr(restaurant, field)
         )
-        formula_ready = self.formulas.production_ready()
+        formula_ready = self.financial_formulas_ready()
         financial_review = (
             settlement.manual_review_orders > 0
             or settlement.settlement_status
@@ -141,6 +162,7 @@ class Phase8DocumentEngine:
         generated_at: datetime | None = None,
     ) -> DocumentPreview:
         readiness = self.readiness(restaurant, settlement)
+        financial_content = self._financial_content(settlement)
         watermark = (
             "DRAFT · NOT VALIDATED"
             if readiness.status != DocumentReadinessStatus.READY
@@ -158,6 +180,11 @@ class Phase8DocumentEngine:
             watermark=watermark,
             generated_at=generated_at or datetime.now(UTC),
             readiness=readiness,
+            financial_policy_version=(
+                self.policy.policy_version
+                if self.financial_formulas_ready() and self.policy
+                else None
+            ),
             content={
                 "partner": restaurant.restaurant_name,
                 "restaurant_id": settlement.restaurant_id,
@@ -173,14 +200,40 @@ class Phase8DocumentEngine:
                     else None
                 ),
                 "gross_order_value": str(settlement.gross_order_value),
-                "commission_amount": None,
-                "invoice_ht": None,
-                "invoice_tva": None,
-                "invoice_ttc": None,
-                "note_de_debours": None,
-                "final_net_payable": None,
+                **financial_content,
             },
         )
+
+    def _financial_content(
+        self, settlement: RestaurantSettlementEvaluation
+    ) -> dict[str, str | None]:
+        empty = {
+            "commission_amount": None,
+            "invoice_ht": None,
+            "invoice_tva": None,
+            "invoice_ttc": None,
+            "note_de_debours": None,
+            "final_net_payable": None,
+        }
+        if (
+            not self.financial_formulas_ready()
+            or self.policy is None
+            or self.certification is None
+        ):
+            return empty
+        calculated = CertifiedFinancialCalculator().calculate(
+            settlement,
+            certification=self.certification,
+            policy=self.policy,
+        )
+        return {
+            "commission_amount": str(calculated.commission_amount),
+            "invoice_ht": str(calculated.invoice_ht),
+            "invoice_tva": str(calculated.invoice_tva),
+            "invoice_ttc": str(calculated.invoice_ttc),
+            "note_de_debours": str(calculated.disbursement_note),
+            "final_net_payable": str(calculated.net_payable),
+        }
 
     @staticmethod
     def render_local_preview(preview: DocumentPreview) -> bytes:

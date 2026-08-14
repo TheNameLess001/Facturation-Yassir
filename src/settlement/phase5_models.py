@@ -165,6 +165,7 @@ class RestaurantSettlementEvaluation(Phase5Model):
     invoice_ttc: Decimal | None = None
     disbursement_note: Decimal | None = None
     net_payable: Decimal | None = None
+    financial_policy_version: str | None = None
     settlement_status: RestaurantSettlementStatus
     issue_codes: tuple[str, ...] = ()
     orders: tuple[SettlementOrder, ...] = ()

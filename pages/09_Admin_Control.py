@@ -15,6 +15,7 @@ from src.emails.phase10_models import EmailAutomationMode
 from src.emails.runtime import load_email_center_snapshot
 from src.emails.workflow_repository import EmailWorkflowRepository
 from src.google.exceptions import GoogleIntegrationError
+from src.settlement.legacy_validation import LegacyFormulaRegistry
 from src.settlement.periods import SettlementPeriodService
 from src.settlement.phase5_runtime import load_phase5_workspace
 from src.ui.layout import page_setup, render_kpis
@@ -92,6 +93,19 @@ st.dataframe(
     width="stretch",
 )
 st.warning("Financial document totals are not displayed because legacy formulas are not validated.")
+
+st.markdown("### Financial Formula Certification")
+certification = LegacyFormulaRegistry().certification()
+render_kpis(
+    [
+        ("Policy", certification.policy_version or "NOT ASSIGNED", "Version required"),
+        ("Commission Base", "NOT_VALIDATED", "No authoritative evidence"),
+        ("HT / TVA / TTC", "NOT_VALIDATED", "TVA rate not assumed"),
+        ("Note de débours", "NOT_VALIDATED", "Components unproven"),
+        ("Net Payable", "NOT_VALIDATED", "No production value"),
+        ("Certification", certification.status.value, certification.reason),
+    ]
+)
 
 st.markdown("### Period-scoped automation")
 mode = st.radio(

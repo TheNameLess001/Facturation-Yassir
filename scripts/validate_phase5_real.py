@@ -8,6 +8,7 @@ from src.emails.runtime import build_email_center_snapshot
 from src.google.auth import build_google_credentials
 from src.google.drive_service import GoogleDriveService
 from src.restaurants.registry_runtime import run_restaurant_registry
+from src.settlement.legacy_validation import LegacyFormulaRegistry
 from src.settlement.periods import SettlementPeriodService
 from src.settlement.phase5_models import RestaurantSettlementStatus
 from src.settlement.phase5_runtime import Phase5Workspace, load_phase5_processed_inputs
@@ -166,6 +167,11 @@ def main() -> None:
     print("distinct_cancellation_reasons", len(profile.cancellation_reasons))
     print("cancellation_fields", "|".join(profile.cancellation_fields))
     print("legacy_policy_identified", service.legacy_policy.identified)
+    certification = LegacyFormulaRegistry().certification()
+    print("financial_formula_certification", certification.status.value)
+    print("financial_policy_implemented", certification.policy_implemented)
+    print("financial_policy_version", certification.policy_version or "NOT_ASSIGNED")
+    print("financial_formulas_production_ready", certification.production_ready)
 
 
 if __name__ == "__main__":

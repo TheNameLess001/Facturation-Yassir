@@ -173,6 +173,25 @@ Period locking is Admin-only and requires exact typed confirmation. A locked per
 
 The current authoritative legacy formulas are still unavailable. Production documents, EMAIL_READY, authorization for SEND, and production delivery therefore remain blocked. Implementation approval is not GO-LIVE approval; production activation requires the separately documented financial, legal, Gmail, dry-run, safety-flag, and explicit human authorization checks.
 
+## Production Activation 1 — financial formula certification
+
+CashCo now exposes a versioned financial-policy contract, structured evidence report, exact Decimal parity engine, and `FinancialFormulaCertification` gate. Certification can be `NOT_FOUND`, `DISCOVERED`, `PARITY_FAILED`, `PARTIALLY_VALIDATED`, or `CERTIFIED`. It requires authoritative evidence for every required field, an implemented policy version, multiple complete historical parity cases, no hidden tolerance, and zero reconciliation difference. Evidence alone cannot unlock production calculations.
+
+The exhaustive repository audit covered the working tree, all reachable commits, deleted paths, reflogs, unreachable Git blobs, the remote branch/tag inventory, and PDF/Excel/CSV/template filenames. The original remote repository contains only its one-line README; no legacy production code, invoice, settlement spreadsheet, note de débours, or approved specification exists. The current `SettlementCalculator` remains WEAK prototype evidence and does not establish a commission base, tax rate, HT/TVA/TTC chain, debours components, compensation treatment, or rounding stages. Certification therefore remains `NOT_FOUND`; no policy version is assigned and all production amounts stay null.
+
+The Documents workbench accepts local PDF, CSV, and Excel references for memory-only inspection. PDF files are not OCR-processed. CSV/Excel files retain only schema, sheet names, row counts, size, and SHA-256 in the runtime profile; row values and source bytes are not persisted or uploaded to Drive.
+
+To complete certification, provide approved reference material covering multiple restaurants and both P1/P2 where available:
+
+- authoritative production code or an approved accounting specification;
+- historical settlement workbooks with their original Excel formulas intact;
+- matched production invoices and notes de débours for the same restaurant/period;
+- expected commission, HT, TVA, TTC, debours, and net payable values;
+- documented order eligibility, promotion, delivery-fee, cancellation, and compensation treatment;
+- the exact TVA rate/source, rounding precision/mode, and rounding stage.
+
+Synthetic tests demonstrate the certification mechanics only. Their formulas and rates are explicitly non-production and are never loaded by the application runtime.
+
 ## Source discovery boundary
 
 The Data Sources page validates the real service-account connection, checks each active configured Drive location independently, inventories Admin Earnings sources, and maintains a metadata manifest. Overall readiness depends on Google authentication, Admin Earnings, Invoice Scope, RST List, and the required CashCo workspace folders. Finance Tracking has no effect. Settlement evaluation is read-only and in memory. Document preview is local and gated; no Google restaurant Sheet, Drive document publication, email, or payment workflow is enabled.

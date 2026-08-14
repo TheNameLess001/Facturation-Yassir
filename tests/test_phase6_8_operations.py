@@ -254,7 +254,7 @@ def test_authoritative_evidence_is_required_for_every_formula() -> None:
         ),
     )
     assert formula_registry.production_ready(partial) is False
-    assert formula_registry.production_ready(complete) is True
+    assert formula_registry.production_ready(complete) is False
 
 
 def test_document_readiness_preview_and_versioning_are_formula_gated(tmp_path) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from src.config import get_settings
 from src.emails.gmail_adapter import inspect_gmail_capability
 from src.emails.runtime import build_email_center_snapshot
+from src.settlement.legacy_validation import LegacyFormulaRegistry
 from src.settlement.phase5_runtime import load_phase5_workspace
 
 
@@ -11,6 +12,7 @@ def main() -> None:
     workspace = load_phase5_workspace("2026-07-P2")
     snapshot = build_email_center_snapshot(workspace, settings=settings)
     gmail = inspect_gmail_capability(settings)
+    certification = LegacyFormulaRegistry().certification()
     print("REAL_PHASE10_READ_ONLY")
     print("period", snapshot.period_code)
     print("scope_restaurants", snapshot.scope_restaurants)
@@ -33,6 +35,9 @@ def main() -> None:
     print("gmail_draft_capability", gmail.draft_capability.value)
     print("gmail_send_capability", gmail.send_capability.value)
     print("external_messages_sent_by_validation", 0)
+    print("financial_formula_certification", certification.status.value)
+    print("financial_policy_version", certification.policy_version or "NOT_ASSIGNED")
+    print("financial_formulas_production_ready", certification.production_ready)
 
 
 if __name__ == "__main__":
