@@ -17,6 +17,13 @@ from src.documents.phase8 import (
     DocumentReadinessStatus,
     Phase8DocumentEngine,
 )
+from src.documents.publishing import (
+    DocumentPublicationRepository,
+    DocumentPublishingService,
+    inspect_drive_destination,
+)
+from src.google.auth import build_google_credentials
+from src.google.drive_service import GoogleDriveService
 from src.google.exceptions import GoogleIntegrationError
 from src.restaurants.legal_master import PartnerLegalMasterSource
 from src.settlement.legacy_validation import LegacyFormulaRegistry
@@ -43,6 +50,8 @@ def document_preview_dialog(restaurant, settlement) -> None:
         format_func=lambda item: item.value,
     )
     preview = engine.preview(document_type, restaurant, settlement)
+    candidate = engine.production_candidate(document_type, restaurant, settlement)
+    rendered = engine.render_production_document(candidate)
     if preview.readiness.financial_formulas_validated:
         st.info(preview.watermark)
     else:
@@ -78,14 +87,13 @@ def document_preview_dialog(restaurant, settlement) -> None:
         )
     with financial:
         st.write(preview.readiness.model_dump())
+    st.markdown("#### Rendered document")
+    st.components.v1.html(rendered.content.decode("utf-8"), height=620, scrolling=True)
     st.download_button(
-        "Download local JSON preview",
-        data=engine.render_local_preview(preview),
-        file_name=(
-            f"{preview.restaurant_id}_{preview.period_code}_"
-            f"{preview.document_type.value}_v{preview.version}_DRAFT.json"
-        ),
-        mime="application/json",
+        "Download validated HTML preview",
+        data=rendered.content,
+        file_name=rendered.filename,
+        mime=rendered.mime_type,
     )
     st.caption(
         "Preview only. No Drive file is created and no production document number is reserved."
@@ -154,7 +162,7 @@ def legal_review_dialog(restaurant, settlement) -> None:
 
 page_setup("Documents")
 st.title("Document Engine")
-st.caption("Versioned previews · Legacy formula hard gate · No Drive creation")
+st.caption("Versioned rendering · Immutable publishing · No automatic production action")
 settings = get_settings()
 periods = SettlementPeriodService(settings.timezone)
 today = datetime.now(ZoneInfo(settings.timezone)).date()
@@ -202,6 +210,49 @@ document_candidates = {
     }
     for restaurant_id in restaurants
 }
+publication_repository = DocumentPublicationRepository(
+    settings.document_publication_registry_path
+)
+provider_create_denied = publication_repository.provider_create_denied()
+try:
+    destination = inspect_drive_destination(
+        GoogleDriveService(build_google_credentials(settings)),
+        settings.documents_folder_id,
+    )
+except (GoogleIntegrationError, ValueError, OSError):
+    destination = None
+
+st.markdown("### Publishing control")
+render_kpis(
+    [
+        ("Mode", settings.document_publish_mode, "PREVIEW by default"),
+        (
+            "Drive",
+            destination.destination_type.value if destination else "UNAVAILABLE",
+            destination.folder_name if destination and destination.folder_name else "Not resolved",
+        ),
+        (
+            "Create",
+            (
+                "NOT AVAILABLE"
+                if provider_create_denied
+                else "AVAILABLE"
+                if destination and destination.can_create
+                else "NOT AVAILABLE"
+            ),
+            (
+                "Provider rejected file creation"
+                if provider_create_denied
+                else "Metadata capability"
+            ),
+        ),
+        ("Production", "NOT AUTHORIZED", "Activation 4 is sample-only"),
+    ]
+)
+st.caption(
+    "Readiness and publishing are independent. This page performs metadata reads and "
+    "local rendering only; it never starts a Drive publication automatically."
+)
 render_kpis(
     [
         (
@@ -229,6 +280,13 @@ st.success(
     "Legal, review, commission and data-quality gates remain independent."
 )
 
+
+def publication_status(candidate):
+    stored = publication_repository.latest(
+        DocumentPublishingService.publication_key(candidate)
+    )
+    return stored.status.value if stored else "NOT_PUBLISHED"
+
 rows = [
     {
         "Restaurant": restaurants[restaurant_id].restaurant_name,
@@ -243,6 +301,18 @@ rows = [
         "Statement": document_candidates[restaurant_id][
             CashCoDocumentType.PARTNER_STATEMENT
         ].status.value,
+        "Invoice Publishing": publication_status(
+            document_candidates[restaurant_id][CashCoDocumentType.INVOICE]
+        ),
+        "Débours Publishing": publication_status(
+            document_candidates[restaurant_id][CashCoDocumentType.NOTE_DE_DEBOURS]
+        ),
+        "Statement Publishing": publication_status(
+            document_candidates[restaurant_id][CashCoDocumentType.PARTNER_STATEMENT]
+        ),
+        "Version": document_candidates[restaurant_id][
+            CashCoDocumentType.INVOICE
+        ].document_version,
         "Financial Validation": (
             "READY" if item.settlement_final else "REVIEW"
         ),
@@ -252,15 +322,35 @@ rows = [
     for restaurant_id, item in readiness.items()
 ]
 st.markdown("### Document readiness")
+publication_filter = st.selectbox(
+    "Publishing status",
+    ["ALL", "READY", "PUBLISHED", "FAILED", "NOT_PUBLISHED", "BLOCKED"],
+)
+if publication_filter == "PUBLISHED":
+    visible_rows = [
+        row
+        for row in rows
+        if any(row[key] in {"PUBLISHED", "ALREADY_PUBLISHED"} for key in ("Invoice Publishing", "Débours Publishing", "Statement Publishing"))
+    ]
+elif publication_filter == "FAILED":
+    visible_rows = [row for row in rows if "FAILED" in row.values()]
+elif publication_filter == "NOT_PUBLISHED":
+    visible_rows = [row for row in rows if "NOT_PUBLISHED" in row.values()]
+elif publication_filter == "READY":
+    visible_rows = [row for row in rows if row["Status"] == "READY"]
+elif publication_filter == "BLOCKED":
+    visible_rows = [row for row in rows if row["Status"] != "READY"]
+else:
+    visible_rows = rows
 event = st.dataframe(
-    pd.DataFrame(rows),
+    pd.DataFrame(visible_rows),
     hide_index=True,
     width="stretch",
     on_select="rerun",
     selection_mode="single-row",
 )
 if event.selection.rows:
-    selected = rows[event.selection.rows[0]]["Restaurant ID"]
+    selected = visible_rows[event.selection.rows[0]]["Restaurant ID"]
     document_preview_dialog(restaurants[selected], settlements[selected])
 
 st.markdown("### Legal Data Review")

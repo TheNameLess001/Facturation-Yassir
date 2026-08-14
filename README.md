@@ -219,6 +219,39 @@ The source uses a five-minute process cache and a normalized content fingerprint
 
 CashCo independently calculates document, email, and payment readiness from raw fields. Google helper columns such as Data Status, Payment Status, Legal Completeness %, and RIB Status are deliberately ignored as backend truth. RIB remains masked and payment-specific; it never blocks commission invoices, notes de débours, or statements. Any change to legal document content or Finance Email changes immutable document/package hashes and therefore invalidates a future snapshot-bound authorization.
 
+## Production Activation 4 — controlled publishing and dry run
+
+The pre-production execution chain is deliberately staged:
+
+```text
+Financial Certification → Legal Master → Settlement Ready → Document Ready
+→ Document Publish → Email Package → Gmail Capability → Admin Authorization
+→ Production Safety Flag → Send
+```
+
+Readiness is not execution. `DOCUMENT_READY`, `DOCUMENT_PUBLISHED`,
+`EMAIL_PACKAGE_READY`, `GMAIL_CAPABLE`, `SEND_AUTHORIZED`, and
+`PRODUCTION_SEND_ENABLED` remain independent controls.
+
+Document rendering is deterministic, versioned HTML generated exclusively from
+`cashco_legacy_v1` results. Each candidate binds financial, legal, settlement, and
+rendered-content SHA-256 hashes. Drive publication defaults to
+`CASHCO_DOCUMENT_PUBLISH_MODE=PREVIEW`, which performs no write. `SAMPLE` is limited
+to a separately initiated 1–3 restaurant validation under the clearly marked
+`CashCo_VALIDATION_DRY_RUN` tree. The Activation 4 publisher rejects `PRODUCTION`,
+never overwrites a published version, and retries failed documents independently.
+
+Gmail execution defaults to `DISABLED`. A future sandbox requires an explicitly
+configured sender and `CASHCO_GMAIL_SANDBOX_RECIPIENT`; provider delivery replaces
+the production recipient and prefixes the subject with `[TEST CASHCO]`. Without
+those settings CashCo performs zero Gmail provider calls. A Drive service account
+without Workspace domain-wide delegation is not Gmail authority.
+
+`CASHCO_PRODUCTION_EMAIL_SEND_ENABLED=false` remains the backend hard stop. No
+preview, Drive publication, sandbox package, Admin role, or authorization can
+bypass it. Production activation and real partner communication require a future
+explicit business-owner GO-LIVE decision.
+
 ## Source discovery boundary
 
 The Data Sources page validates the real service-account connection, checks each active configured Drive location independently, inventories Admin Earnings sources, and maintains a metadata manifest. Overall readiness depends on Google authentication, Admin Earnings, Invoice Scope, RST List, and the required CashCo workspace folders. Finance Tracking has no effect. Settlement evaluation is read-only and in memory. Document preview is local and gated; no Google restaurant Sheet, Drive document publication, email, or payment workflow is enabled.

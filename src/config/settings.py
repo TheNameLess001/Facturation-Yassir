@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     documents_folder_id: str | None = None
     audit_folder_id: str | None = None
     document_registry_path: Path = Path("data/local/document_registry.sqlite3")
+    document_publication_registry_path: Path = Path(
+        "data/local/document_publications.sqlite3"
+    )
+    document_publish_mode: Literal["PREVIEW", "SAMPLE", "PRODUCTION"] = "PREVIEW"
+    document_sample_size: int = Field(default=1, ge=1, le=3)
     email_registry_path: Path = Path("data/local/email_registry.sqlite3")
     authorization_registry_path: Path = Path(
         "data/local/authorization_registry.sqlite3"
@@ -90,6 +95,10 @@ class Settings(BaseSettings):
         "NOT_CONFIGURED"
     )
     gmail_sender_email: str | None = None
+    gmail_execution_mode: Literal["DISABLED", "SANDBOX", "PRODUCTION"] = "DISABLED"
+    gmail_sandbox_recipient: str | None = None
+    gmail_sandbox_allow_drafts: bool = False
+    gmail_sandbox_allow_send: bool = False
     email_workflow_registry_path: Path = Path(
         "data/local/email_workflow_registry.sqlite3"
     )

@@ -127,7 +127,7 @@ def build_email_center_snapshot(
                     )
                 ),
                 version=candidate.document_version,
-                content_hash=candidate.content_hash,
+                content_hash=candidate.document_hash,
                 status=candidate.status.value,
             )
             for candidate in document_candidates

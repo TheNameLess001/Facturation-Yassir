@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from src.config import get_settings
+from src.documents.publishing import DocumentPublicationRepository
 from src.emails.workflow_repository import EmailWorkflowRepository
 from src.google.exceptions import GoogleIntegrationError
 from src.restaurants.registry_runtime import run_restaurant_registry
@@ -26,6 +27,9 @@ email_repository = EmailWorkflowRepository(
     get_settings().email_workflow_registry_path
 )
 email_events = email_repository.list_audit(period_code)
+document_publications = DocumentPublicationRepository(
+    get_settings().document_publication_registry_path
+).list_for_period(period_code)
 try:
     legal_snapshot = run_restaurant_registry().partner_legal_master
     legal_events = legal_snapshot.audit_events if legal_snapshot else ()
@@ -46,6 +50,11 @@ render_kpis(
         ),
         ("Deleted", "0", "No delete operation exists"),
         ("Email Workflow Events", f"{len(email_events):,}", "Operational metadata only"),
+        (
+            "Document Events",
+            f"{len(document_publications):,}",
+            "Immutable publication attempts",
+        ),
         ("Legal Master Events", f"{len(legal_events):,}", "No legal values recorded"),
     ]
 )
@@ -99,6 +108,34 @@ st.dataframe(
     width="stretch",
 )
 st.caption("Email bodies, RIBs, credentials and provider tokens are never audit-logged.")
+st.markdown("### Document rendering and publication")
+st.dataframe(
+    pd.DataFrame(
+        [
+            {
+                "Event": {
+                    "PUBLISHING": "DOCUMENT_PUBLISH_STARTED",
+                    "PUBLISHED": "DOCUMENT_PUBLISHED",
+                    "FAILED": "DOCUMENT_PUBLISH_FAILED",
+                    "ALREADY_PUBLISHED": "DOCUMENT_ALREADY_PUBLISHED",
+                    "NOT_PUBLISHED": "DOCUMENT_RENDERED",
+                }[item.status.value],
+                "Restaurant ID": item.restaurant_id,
+                "Period": item.period_code,
+                "Document": item.document_type,
+                "Version": item.document_version,
+                "Hash": f"{item.document_hash[:16]}…",
+                "Status": item.status.value,
+                "Result": item.error_code or "—",
+                "Published at": item.published_at,
+            }
+            for item in document_publications
+        ]
+    ),
+    hide_index=True,
+    width="stretch",
+)
+st.caption("No document body, legal identifier, RIB, credential, or token is logged.")
 st.markdown("### Partner Legal Master synchronization")
 st.dataframe(
     pd.DataFrame(

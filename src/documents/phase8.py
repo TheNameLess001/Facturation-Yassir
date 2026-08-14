@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -84,11 +85,27 @@ class ProductionDocumentCandidate(BaseModel):
     document_reference: str
     financial_policy_version: str
     settlement_snapshot_hash: str
+    financial_snapshot_hash: str
+    legal_snapshot_hash: str
     content_hash: str
+    document_hash: str
     legal_status: DocumentLegalStatus
     status: ProductionDocumentStatus
     validation_issues: tuple[str, ...] = ()
     content: dict[str, str | None]
+
+
+class RenderedDocument(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    restaurant_id: str
+    period_code: str
+    document_type: CashCoDocumentType
+    document_version: int
+    filename: str
+    mime_type: str = "text/html"
+    content: bytes
+    document_hash: str
 
 
 class Phase8DocumentEngine:
@@ -328,6 +345,31 @@ class Phase8DocumentEngine:
         ):
             issues.append("NET_PAYABLE_RECONCILIATION_FAILED")
         snapshot_hash = self._stable_hash(settlement.model_dump(mode="json"))
+        financial_snapshot_hash = self._stable_hash(
+            {
+                "financial_policy_version": preview.financial_policy_version,
+                "commission": preview.content.get("commission"),
+                **{
+                    field: preview.content.get(field)
+                    for field in self.FINANCIAL_FIELDS
+                },
+            }
+        )
+        legal_snapshot_hash = self._stable_hash(
+            {
+                field: preview.content.get(field)
+                for field in (
+                    "partner",
+                    "partner_name_source",
+                    "restaurant_id",
+                    "legal_entity",
+                    "ice",
+                    "if",
+                    "rc",
+                    "address",
+                )
+            }
+        )
         content_hash = self._stable_hash(
             {
                 "document_reference": preview.document_key,
@@ -336,7 +378,7 @@ class Phase8DocumentEngine:
                 "content": preview.content,
             }
         )
-        return ProductionDocumentCandidate(
+        candidate = ProductionDocumentCandidate(
             restaurant_id=settlement.restaurant_id,
             period_code=settlement.period_code,
             document_type=document_type,
@@ -344,7 +386,10 @@ class Phase8DocumentEngine:
             document_reference=preview.document_key,
             financial_policy_version=preview.financial_policy_version or "NOT_VALIDATED",
             settlement_snapshot_hash=snapshot_hash,
+            financial_snapshot_hash=financial_snapshot_hash,
+            legal_snapshot_hash=legal_snapshot_hash,
             content_hash=content_hash,
+            document_hash="PENDING_RENDER",
             legal_status=preview.readiness.legal_status,
             status=(
                 ProductionDocumentStatus.PRODUCTION_READY
@@ -354,6 +399,8 @@ class Phase8DocumentEngine:
             validation_issues=tuple(dict.fromkeys(issues)),
             content=preview.content,
         )
+        rendered = self.render_production_document(candidate)
+        return candidate.model_copy(update={"document_hash": rendered.document_hash})
 
     def _financial_content(
         self, settlement: RestaurantSettlementEvaluation
@@ -411,6 +458,82 @@ class Phase8DocumentEngine:
             indent=2,
             sort_keys=True,
         ).encode()
+
+    @classmethod
+    def render_production_document(
+        cls, candidate: ProductionDocumentCandidate
+    ) -> RenderedDocument:
+        """Render deterministic, self-contained HTML; calculations stay upstream."""
+        content = candidate.content
+        labels = {
+            CashCoDocumentType.INVOICE: "FACTURE COMMISSION",
+            CashCoDocumentType.NOTE_DE_DEBOURS: "NOTE DE DÉBOURS",
+            CashCoDocumentType.PARTNER_STATEMENT: "PARTNER STATEMENT",
+        }
+        rows_by_type = {
+            CashCoDocumentType.INVOICE: (
+                ("Base de calcul TTC", "sales_ttc"),
+                ("Commission HT", "invoice_ht"),
+                ("TVA 20%", "invoice_tva"),
+                ("Total Facture TTC", "invoice_ttc"),
+            ),
+            CashCoDocumentType.NOTE_DE_DEBOURS: (
+                ("Total du panier TTC", "sales_ttc"),
+                ("Déduction Yassir TTC", "invoice_ttc"),
+                ("Total à payer TTC", "final_net_payable"),
+            ),
+            CashCoDocumentType.PARTNER_STATEMENT: (
+                ("Sales TTC", "sales_ttc"),
+                ("Sales HT", "sales_ht"),
+                ("Commission HT", "commission_amount"),
+                ("TVA 20%", "invoice_tva"),
+                ("Invoice TTC", "invoice_ttc"),
+                ("Net payable", "final_net_payable"),
+            ),
+        }
+
+        def safe(value: object) -> str:
+            return html.escape(str(value or "—"), quote=True)
+
+        financial_rows = "".join(
+            f"<tr><th>{safe(label)}</th><td>{safe(content.get(field))} MAD</td></tr>"
+            for label, field in rows_by_type[candidate.document_type]
+        )
+        optional_legal = "".join(
+            f"<span><strong>{safe(label)}:</strong> {safe(content.get(field))}</span>"
+            for label, field in (("ICE", "ice"), ("IF", "if"), ("RC", "rc"))
+            if content.get(field)
+        )
+        watermark = (
+            ""
+            if candidate.status == ProductionDocumentStatus.PRODUCTION_READY
+            else '<div class="watermark">DRAFT · NOT VALIDATED</div>'
+        )
+        markup = f"""<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title>{safe(labels[candidate.document_type])}</title>
+<style>body{{font:14px Arial,sans-serif;color:#17213b;margin:48px}}header{{border-bottom:3px solid #6941c6;padding-bottom:18px}}h1{{font-size:24px}}.meta{{color:#667085}}.watermark{{padding:10px;margin-bottom:20px;background:#fff0ef;color:#b42318;font-weight:700;text-align:center}}.legal{{display:grid;gap:6px;margin:28px 0}}table{{width:100%;border-collapse:collapse;margin-top:24px}}th,td{{padding:12px;border-bottom:1px solid #e4e7ec;text-align:left}}td{{text-align:right;font-variant-numeric:tabular-nums}}footer{{margin-top:42px;color:#667085;font-size:11px}}</style></head>
+<body>{watermark}<header><div class="meta">Yassir CashCo · {safe(candidate.period_code)}</div><h1>{safe(labels[candidate.document_type])}</h1><div>Référence: {safe(candidate.document_reference)}</div></header>
+<section class="legal"><strong>{safe(content.get('partner'))}</strong><span>Restaurant ID: {safe(candidate.restaurant_id)}</span><span>Adresse: {safe(content.get('address'))}</span>{optional_legal}</section>
+<table>{financial_rows}</table>
+<footer>Version {candidate.document_version} · Politique financière {safe(candidate.financial_policy_version)} · Document validé par les contrôles CashCo</footer></body></html>"""
+        payload = markup.encode("utf-8")
+        suffix = {
+            CashCoDocumentType.INVOICE: "facture_commission",
+            CashCoDocumentType.NOTE_DE_DEBOURS: "note_de_debours",
+            CashCoDocumentType.PARTNER_STATEMENT: "partner_statement",
+        }[candidate.document_type]
+        return RenderedDocument(
+            restaurant_id=candidate.restaurant_id,
+            period_code=candidate.period_code,
+            document_type=candidate.document_type,
+            document_version=candidate.document_version,
+            filename=(
+                f"{candidate.period_code}_{candidate.restaurant_id}_{suffix}_"
+                f"v{candidate.document_version}.html"
+            ),
+            content=payload,
+            document_hash=hashlib.sha256(payload).hexdigest(),
+        )
 
     @staticmethod
     def _stable_hash(value: object) -> str:

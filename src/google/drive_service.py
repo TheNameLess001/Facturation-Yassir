@@ -25,8 +25,8 @@ from src.google.models import (
 
 LOGGER = logging.getLogger(__name__)
 FILE_FIELDS = (
-    "id,name,mimeType,modifiedTime,createdTime,size,md5Checksum,parents,webViewLink,"
-    "capabilities(canAddChildren,canEdit,canDownload)"
+    "id,name,mimeType,modifiedTime,createdTime,size,md5Checksum,parents,driveId,spaces,"
+    "webViewLink,capabilities(canAddChildren,canEdit,canDownload,canDelete)"
 )
 
 
@@ -265,6 +265,30 @@ class GoogleDriveService:
             raise self._translate_error(exc, file_id) from exc
         except Exception as exc:
             raise DriveConnectionError("Google Drive update failed") from exc
+
+    def create_file(
+        self, folder_id: str, name: str, content: bytes, mime_type: str
+    ) -> DriveFile:
+        """Create one immutable publication object without replacing a namesake."""
+        media = MediaIoBaseUpload(
+            io.BytesIO(content), mimetype=mime_type, resumable=True
+        )
+        try:
+            payload = (
+                self._api.files()
+                .create(
+                    body={"name": name, "parents": [folder_id]},
+                    media_body=media,
+                    fields=FILE_FIELDS,
+                    supportsAllDrives=True,
+                )
+                .execute()
+            )
+            return DriveFile.from_api(payload)
+        except HttpError as exc:
+            raise self._translate_error(exc) from exc
+        except Exception as exc:
+            raise DriveConnectionError("Google Drive create failed") from exc
 
     def test_connection(self, root_folder_id: str) -> DriveConnectionResult:
         folder = self.get_folder_metadata(root_folder_id)

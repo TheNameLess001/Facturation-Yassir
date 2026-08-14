@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 SUPPORTED_SOURCE_MIME_TYPES = frozenset(
@@ -27,9 +27,11 @@ class DriveFile(BaseModel):
     size: int | None = None
     md5_checksum: str | None = None
     parent_ids: tuple[str, ...] = ()
+    drive_id: str | None = None
+    spaces: tuple[str, ...] = ()
     web_view_link: str | None = None
     is_folder: bool = False
-    capabilities: dict[str, bool] = {}
+    capabilities: dict[str, bool] = Field(default_factory=dict)
 
     @classmethod
     def from_api(cls, value: dict[str, object]) -> DriveFile:
@@ -51,6 +53,8 @@ class DriveFile(BaseModel):
             if value.get("md5Checksum")
             else None,
             parent_ids=tuple(str(item) for item in value.get("parents", [])),  # type: ignore[arg-type]
+            drive_id=str(value["driveId"]) if value.get("driveId") else None,
+            spaces=tuple(str(item) for item in value.get("spaces", [])),  # type: ignore[arg-type]
             web_view_link=str(value["webViewLink"])
             if value.get("webViewLink")
             else None,

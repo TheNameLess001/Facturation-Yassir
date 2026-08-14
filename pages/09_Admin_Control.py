@@ -8,12 +8,19 @@ import streamlit as st
 
 from src.auth import AuthService, Permission, RBACService
 from src.config import get_settings
+from src.documents.publishing import (
+    DocumentPublicationRepository,
+    inspect_drive_destination,
+)
 from src.emails.gmail_adapter import inspect_gmail_capability
 from src.emails.period_locking import Phase10PeriodLockService
 from src.emails.phase10_authorization import PeriodAuthorizationService
 from src.emails.phase10_models import EmailAutomationMode
 from src.emails.runtime import load_email_center_snapshot
+from src.emails.sandbox import inspect_gmail_sandbox
 from src.emails.workflow_repository import EmailWorkflowRepository
+from src.google.auth import build_google_credentials
+from src.google.drive_service import GoogleDriveService
 from src.google.exceptions import GoogleIntegrationError
 from src.settlement.legacy_validation import LegacyFormulaRegistry
 from src.settlement.periods import SettlementPeriodService
@@ -43,6 +50,17 @@ repository = EmailWorkflowRepository(settings.email_workflow_registry_path)
 authorization = repository.active_authorization(period_code)
 period_mode = repository.mode_for_period(period_code)
 capability = inspect_gmail_capability(settings)
+sandbox = inspect_gmail_sandbox(settings)
+try:
+    drive_destination = inspect_drive_destination(
+        GoogleDriveService(build_google_credentials(settings)),
+        settings.documents_folder_id,
+    )
+except (GoogleIntegrationError, ValueError, OSError):
+    drive_destination = None
+drive_create_denied = DocumentPublicationRepository(
+    settings.document_publication_registry_path
+).provider_create_denied()
 st.markdown(
     f"""<div class="cc-off-banner"><div class="cc-off-title">AUTOMATION · {period_mode.value}</div>
     <div class="cc-off-copy">PRODUCTION SEND FLAG · {'ON' if settings.production_email_send_enabled else 'OFF'} · Current authorization: {'ACTIVE' if authorization else 'NONE'}</div></div>""",
@@ -62,6 +80,31 @@ stages = [
     ("LOCK", "COMPLETE" if repository.period_locked(period_code) else "BLOCKED"),
 ]
 render_kpis([(name, status, period_code) for name, status in stages])
+
+st.markdown("### Go-Live Readiness")
+render_kpis(
+    [
+        ("Financial Policy", "READY", "cashco_legacy_v1"),
+        ("Legal Master", "READY", "Live read-only source"),
+        ("Settlement", "READY", f"{snapshot.settlement_ready:,} restaurants"),
+        ("Documents", "READY", f"{snapshot.document_ready:,} candidates"),
+        (
+            "Drive Publishing",
+            (
+                "READY"
+                if drive_destination
+                and drive_destination.can_create
+                and not drive_create_denied
+                else "BLOCKED"
+            ),
+            drive_destination.destination_type.value if drive_destination else "UNAVAILABLE",
+        ),
+        ("Email Packages", "READY", f"{snapshot.email_ready:,} buildable"),
+        ("Gmail", capability.authentication.value, sandbox.auth_method.value),
+        ("Authorization", "NOT AUTHORIZED", "Production count 0"),
+        ("Production Safety", "DISABLED", "Backend flag OFF"),
+    ]
+)
 
 st.markdown("### Authorization impact preview")
 render_kpis(

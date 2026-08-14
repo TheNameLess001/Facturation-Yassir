@@ -9,6 +9,7 @@ import streamlit as st
 from src.config import get_settings
 from src.emails.gmail_adapter import inspect_gmail_capability
 from src.emails.runtime import load_email_center_snapshot
+from src.emails.sandbox import inspect_gmail_sandbox
 from src.google.exceptions import GoogleIntegrationError
 from src.settlement.periods import SettlementPeriodService
 from src.ui.layout import page_setup, render_alerts, render_kpis
@@ -154,6 +155,7 @@ if event.selection.rows:
     email_detail(rows[event.selection.rows[0]])
 
 capability = inspect_gmail_capability(settings)
+sandbox = inspect_gmail_sandbox(settings)
 with st.expander("Gmail capability · configuration only"):
     st.write(
         {
@@ -161,9 +163,18 @@ with st.expander("Gmail capability · configuration only"):
             "Authentication": capability.authentication.value,
             "Draft capability": capability.draft_capability.value,
             "Send capability": capability.send_capability.value,
+            "Authentication method": sandbox.auth_method.value,
+            "Execution mode": sandbox.execution_mode.value,
+            "Sender configured": sandbox.sender_configured,
+            "Sandbox recipient configured": sandbox.sandbox_recipient_valid,
+            "Sandbox draft execution": sandbox.draft_execution_allowed,
+            "Sandbox send execution": sandbox.send_execution_allowed,
             "Production safety flag": (
                 "ON" if settings.production_email_send_enabled else "OFF"
             ),
         }
     )
-    st.caption("No Gmail API request or test message was performed.")
+    st.caption(
+        "No Gmail API request or test message was performed. Sandbox delivery can "
+        "never retain the production recipient and requires separate explicit settings."
+    )
