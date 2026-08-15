@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
@@ -13,6 +15,7 @@ from src.emails.phase10_models import (
     PeriodAuthorization,
     SendAttempt,
 )
+from src.emails.sandbox import SandboxDraftRecord, SandboxDraftStatus
 from src.models.domain import AuditEvent
 
 
@@ -198,6 +201,62 @@ class EmailWorkflowRepository:
             ).fetchall()
         return tuple(SendAttempt.model_validate_json(row["payload"]) for row in rows)
 
+    def claim_sandbox_draft(
+        self, record: SandboxDraftRecord
+    ) -> SandboxDraftRecord:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT payload FROM sandbox_drafts WHERE draft_key=? "
+                "ORDER BY attempt_id DESC LIMIT 1",
+                (record.draft_key,),
+            ).fetchone()
+            if row:
+                current = self._sandbox_record(row["payload"])
+                if current.status in {
+                    SandboxDraftStatus.CREATED,
+                    SandboxDraftStatus.PENDING,
+                }:
+                    return current
+            connection.execute(
+                "INSERT INTO sandbox_drafts(draft_key, period_code, status, payload, "
+                "created_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    record.draft_key,
+                    record.period_code,
+                    record.status.value,
+                    self._sandbox_payload(record),
+                    record.created_at.isoformat(),
+                ),
+            )
+        return record
+
+    def record_sandbox_draft(self, record: SandboxDraftRecord) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO sandbox_drafts(draft_key, period_code, status, payload, "
+                "created_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    record.draft_key,
+                    record.period_code,
+                    record.status.value,
+                    self._sandbox_payload(record),
+                    record.created_at.isoformat(),
+                ),
+            )
+
+    def list_latest_sandbox_drafts(
+        self, period_code: str
+    ) -> tuple[SandboxDraftRecord, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload FROM sandbox_drafts WHERE attempt_id IN "
+                "(SELECT MAX(attempt_id) FROM sandbox_drafts WHERE period_code=? "
+                "GROUP BY draft_key) ORDER BY created_at",
+                (period_code,),
+            ).fetchall()
+        return tuple(self._sandbox_record(row["payload"]) for row in rows)
+
     def append_audit(self, event: AuditEvent) -> None:
         safe_event = event.model_copy(
             update={"details": self._safe_details(event.details)}
@@ -291,6 +350,12 @@ class EmailWorkflowRepository:
                     event_type TEXT NOT NULL, payload TEXT NOT NULL,
                     occurred_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS sandbox_drafts (
+                    attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    draft_key TEXT NOT NULL, period_code TEXT NOT NULL,
+                    status TEXT NOT NULL, payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS email_period_state (
                     period_code TEXT PRIMARY KEY, locked INTEGER NOT NULL DEFAULT 0
                 );
@@ -304,3 +369,17 @@ class EmailWorkflowRepository:
         connection = sqlite3.connect(self.path)
         connection.row_factory = sqlite3.Row
         return connection
+
+    @staticmethod
+    def _sandbox_payload(record: SandboxDraftRecord) -> str:
+        payload = asdict(record)
+        payload["status"] = record.status.value
+        payload["created_at"] = record.created_at.isoformat()
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    @staticmethod
+    def _sandbox_record(payload: str) -> SandboxDraftRecord:
+        value = json.loads(payload)
+        value["status"] = SandboxDraftStatus(value["status"])
+        value["created_at"] = datetime.fromisoformat(value["created_at"])
+        return SandboxDraftRecord(**value)

@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     config_folder_id: str | None = None
     partners_folder_id: str | None = None
     documents_folder_id: str | None = None
+    document_storage_mode: Literal["DISABLED", "SHARED_DRIVE", "OAUTH_USER"] = (
+        "DISABLED"
+    )
+    documents_shared_drive_id: str | None = None
     audit_folder_id: str | None = None
     document_registry_path: Path = Path("data/local/document_registry.sqlite3")
     document_publication_registry_path: Path = Path(
@@ -86,6 +90,12 @@ class Settings(BaseSettings):
             "GOOGLE_SERVICE_ACCOUNT_JSON", "CASHCO_GOOGLE_SERVICE_ACCOUNT_JSON"
         ),
     )
+    google_oauth_user_json: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GOOGLE_OAUTH_USER_JSON", "CASHCO_GOOGLE_OAUTH_USER_JSON"
+        ),
+    )
     test_email_recipient: str | None = None
     email_default_mode: Literal["OFF", "PREVIEW", "DRAFT", "SEND"] = "OFF"
     email_allow_drafts: bool = False
@@ -95,10 +105,18 @@ class Settings(BaseSettings):
         "NOT_CONFIGURED"
     )
     gmail_sender_email: str | None = None
+    gmail_domain_delegated_user: str | None = None
+    gmail_oauth_user_json: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GMAIL_OAUTH_USER_JSON", "CASHCO_GMAIL_OAUTH_USER_JSON"
+        ),
+    )
     gmail_execution_mode: Literal["DISABLED", "SANDBOX", "PRODUCTION"] = "DISABLED"
     gmail_sandbox_recipient: str | None = None
     gmail_sandbox_allow_drafts: bool = False
     gmail_sandbox_allow_send: bool = False
+    gmail_sandbox_send_enabled: bool = False
     email_workflow_registry_path: Path = Path(
         "data/local/email_workflow_registry.sqlite3"
     )

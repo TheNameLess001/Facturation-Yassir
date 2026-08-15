@@ -169,6 +169,7 @@ with st.expander("Gmail capability · configuration only"):
             "Sandbox recipient configured": sandbox.sandbox_recipient_valid,
             "Sandbox draft execution": sandbox.draft_execution_allowed,
             "Sandbox send execution": sandbox.send_execution_allowed,
+            "Sandbox send flag": settings.gmail_sandbox_send_enabled,
             "Production safety flag": (
                 "ON" if settings.production_email_send_enabled else "OFF"
             ),

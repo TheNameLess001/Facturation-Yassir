@@ -107,3 +107,40 @@ def inspect_gmail_capability(settings: Settings) -> GmailCapability:
         draft_capability=CapabilityStatus.NOT_TESTED_SAFELY,
         send_capability=CapabilityStatus.NOT_TESTED_SAFELY,
     )
+
+
+def validate_gmail_capability(
+    settings: Settings, *, api: object | None = None
+) -> GmailCapability:
+    """Perform a read-only Gmail profile check only when auth is configured."""
+    configured = inspect_gmail_capability(settings)
+    if configured.authentication == GmailAuthenticationStatus.NOT_CONFIGURED:
+        return configured
+    try:
+        if api is None:
+            from src.google.gmail_auth import build_gmail_api
+
+            api = build_gmail_api(settings)
+        profile = api.users().getProfile(userId="me").execute()  # type: ignore[attr-defined]
+        provider_email = str(profile.get("emailAddress", "")).strip().casefold()
+        sender = (settings.gmail_sender_email or "").strip().casefold()
+        if not provider_email or provider_email != sender:
+            return GmailCapability(
+                credentials_detected=True,
+                authentication=GmailAuthenticationStatus.FAIL,
+                draft_capability=CapabilityStatus.NO,
+                send_capability=CapabilityStatus.NO,
+            )
+        return GmailCapability(
+            credentials_detected=True,
+            authentication=GmailAuthenticationStatus.PASS,
+            draft_capability=CapabilityStatus.NOT_TESTED_SAFELY,
+            send_capability=CapabilityStatus.NOT_TESTED_SAFELY,
+        )
+    except Exception:  # noqa: BLE001 - isolated provider capability boundary
+        return GmailCapability(
+            credentials_detected=True,
+            authentication=GmailAuthenticationStatus.FAIL,
+            draft_capability=CapabilityStatus.NO,
+            send_capability=CapabilityStatus.NO,
+        )

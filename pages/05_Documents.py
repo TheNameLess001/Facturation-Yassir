@@ -20,8 +20,11 @@ from src.documents.phase8 import (
 from src.documents.publishing import (
     DocumentPublicationRepository,
     DocumentPublishingService,
+    DocumentStorageMode,
     inspect_drive_destination,
+    inspect_existing_document_storage_validation,
 )
+from src.documents.storage import build_document_storage_service
 from src.google.auth import build_google_credentials
 from src.google.drive_service import GoogleDriveService
 from src.google.exceptions import GoogleIntegrationError
@@ -213,19 +216,30 @@ document_candidates = {
 publication_repository = DocumentPublicationRepository(
     settings.document_publication_registry_path
 )
-provider_create_denied = publication_repository.provider_create_denied()
+storage_mode = DocumentStorageMode(settings.document_storage_mode)
 try:
+    storage_drive = (
+        build_document_storage_service(settings)
+        if storage_mode != DocumentStorageMode.DISABLED
+        else GoogleDriveService(build_google_credentials(settings))
+    )
     destination = inspect_drive_destination(
-        GoogleDriveService(build_google_credentials(settings)),
+        storage_drive,
         settings.documents_folder_id,
+        storage_mode=storage_mode,
+        shared_drive_id=settings.documents_shared_drive_id,
+    )
+    storage_validation = inspect_existing_document_storage_validation(
+        storage_drive, destination
     )
 except (GoogleIntegrationError, ValueError, OSError):
     destination = None
+    storage_validation = None
 
 st.markdown("### Publishing control")
 render_kpis(
     [
-        ("Mode", settings.document_publish_mode, "PREVIEW by default"),
+        ("Storage Mode", storage_mode.value, "Explicit external configuration"),
         (
             "Drive",
             destination.destination_type.value if destination else "UNAVAILABLE",
@@ -234,19 +248,15 @@ render_kpis(
         (
             "Create",
             (
-                "NOT AVAILABLE"
-                if provider_create_denied
-                else "AVAILABLE"
-                if destination and destination.can_create
-                else "NOT AVAILABLE"
+                "AVAILABLE" if destination and destination.can_create else "NOT AVAILABLE"
             ),
             (
-                "Provider rejected file creation"
-                if provider_create_denied
-                else "Metadata capability"
+                storage_validation.status.value
+                if storage_validation
+                else "Validation not run"
             ),
         ),
-        ("Production", "NOT AUTHORIZED", "Activation 4 is sample-only"),
+        ("Production", "NOT AUTHORIZED", "Go-Live authorization required"),
     ]
 )
 st.caption(

@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as AuthorizedUserCredentials
 
 import google.auth
 from src.config import Settings
@@ -81,3 +82,41 @@ def build_google_credentials(settings: Settings) -> Any:
             extra={"auth_mode": settings.google_auth_mode},
         )
         raise GoogleAuthenticationError("Google authentication failed") from exc
+
+
+def parse_authorized_user_json(settings: Settings) -> dict[str, object]:
+    """Parse external OAuth authorized-user JSON without logging or persisting it."""
+    secret = settings.google_oauth_user_json
+    if secret is None or not secret.get_secret_value().strip():
+        raise GoogleConfigurationError("Google OAuth user is not configured")
+    try:
+        parsed = json.loads(secret.get_secret_value())
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise GoogleConfigurationError(
+            "Google OAuth user configuration is invalid"
+        ) from exc
+    required = ("client_id", "client_secret", "refresh_token")
+    if not isinstance(parsed, dict) or any(
+        not isinstance(parsed.get(field), str) or not parsed[field].strip()
+        for field in required
+    ):
+        raise GoogleConfigurationError("Google OAuth user configuration is invalid")
+    return parsed
+
+
+def build_document_storage_credentials(settings: Settings) -> Any:
+    """Build credentials for the explicitly selected document storage strategy."""
+    if settings.document_storage_mode == "SHARED_DRIVE":
+        return build_google_credentials(settings)
+    if settings.document_storage_mode == "OAUTH_USER":
+        try:
+            return AuthorizedUserCredentials.from_authorized_user_info(
+                parse_authorized_user_json(settings), scopes=[DRIVE_SCOPE]
+            )
+        except GoogleConfigurationError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise GoogleConfigurationError(
+                "Google OAuth user configuration is invalid"
+            ) from exc
+    raise GoogleConfigurationError("Document storage is disabled")

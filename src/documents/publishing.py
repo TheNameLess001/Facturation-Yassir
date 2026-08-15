@@ -26,6 +26,12 @@ class DocumentPublishMode(StrEnum):
     PRODUCTION = "PRODUCTION"
 
 
+class DocumentStorageMode(StrEnum):
+    DISABLED = "DISABLED"
+    SHARED_DRIVE = "SHARED_DRIVE"
+    OAUTH_USER = "OAUTH_USER"
+
+
 class DriveDestinationType(StrEnum):
     MY_DRIVE = "MY_DRIVE"
     SHARED_DRIVE = "SHARED_DRIVE"
@@ -51,13 +57,38 @@ class DriveDestinationCapabilityResult(BaseModel):
 
     folder_id: str | None
     folder_name: str | None
+    storage_mode: DocumentStorageMode = DocumentStorageMode.DISABLED
     destination_type: DriveDestinationType
     capability: DrivePublishingCapability
     can_read: bool
     can_create: bool
     can_update: bool
     can_delete: bool | None
+    can_list: bool = False
+    can_retrieve_metadata: bool = False
     drive_id: str | None = None
+    configuration_error: str | None = None
+
+
+class DriveValidationStatus(StrEnum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    NOT_CONFIGURED = "NOT_CONFIGURED"
+    ALREADY_VALIDATED = "ALREADY_VALIDATED"
+
+
+class DriveValidationResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: DriveValidationStatus
+    filename: str
+    provider_file_id: str | None = None
+    created: bool = False
+    read_back: bool = False
+    metadata_verified: bool = False
+    idempotent: bool = False
+    error_code: str | None = None
+    audit_events: tuple[str, ...] = ()
 
 
 class DocumentPublication(BaseModel):
@@ -100,20 +131,44 @@ class DocumentDriveProvider(Protocol):
         self, folder_id: str, name: str, content: bytes, mime_type: str
     ) -> DriveFile: ...
 
+    def list_files(self, folder_id: str) -> tuple[DriveFile, ...]: ...
+
+    def download_file(self, file_id: str) -> bytes: ...
+
 
 def inspect_drive_destination(
-    provider: DocumentDriveProvider, folder_id: str | None
+    provider: DocumentDriveProvider,
+    folder_id: str | None,
+    *,
+    storage_mode: DocumentStorageMode | None = None,
+    shared_drive_id: str | None = None,
 ) -> DriveDestinationCapabilityResult:
+    selected_mode = storage_mode
+    if selected_mode == DocumentStorageMode.DISABLED:
+        return DriveDestinationCapabilityResult(
+            folder_id=folder_id,
+            folder_name=None,
+            storage_mode=selected_mode,
+            destination_type=DriveDestinationType.OTHER,
+            capability=DrivePublishingCapability.CREATE_NOT_AVAILABLE,
+            can_read=False,
+            can_create=False,
+            can_update=False,
+            can_delete=None,
+            configuration_error="DOCUMENT_STORAGE_DISABLED",
+        )
     if not folder_id:
         return DriveDestinationCapabilityResult(
             folder_id=None,
             folder_name=None,
+            storage_mode=selected_mode or DocumentStorageMode.DISABLED,
             destination_type=DriveDestinationType.OTHER,
             capability=DrivePublishingCapability.INACCESSIBLE,
             can_read=False,
             can_create=False,
             can_update=False,
             can_delete=None,
+            configuration_error="DOCUMENTS_FOLDER_NOT_CONFIGURED",
         )
     try:
         folder = provider.get_folder_metadata(folder_id)
@@ -121,12 +176,14 @@ def inspect_drive_destination(
         return DriveDestinationCapabilityResult(
             folder_id=folder_id,
             folder_name=None,
+            storage_mode=selected_mode or DocumentStorageMode.DISABLED,
             destination_type=DriveDestinationType.OTHER,
             capability=DrivePublishingCapability.INACCESSIBLE,
             can_read=False,
             can_create=False,
             can_update=False,
             can_delete=None,
+            configuration_error="DOCUMENT_DESTINATION_INACCESSIBLE",
         )
     destination_type = (
         DriveDestinationType.SHARED_DRIVE
@@ -136,23 +193,182 @@ def inspect_drive_destination(
         else DriveDestinationType.OTHER
     )
     can_create = bool(folder.capabilities.get("canAddChildren"))
+    configuration_error = None
+    if selected_mode == DocumentStorageMode.SHARED_DRIVE:
+        if not folder.drive_id:
+            configuration_error = "DESTINATION_IS_NOT_SHARED_DRIVE"
+        elif shared_drive_id and folder.drive_id != shared_drive_id:
+            configuration_error = "SHARED_DRIVE_ID_MISMATCH"
+    if selected_mode == DocumentStorageMode.OAUTH_USER and folder.drive_id:
+        # OAuth may access Shared Drive, but the selected mode describes credential
+        # authority rather than destination ownership and is therefore accepted.
+        configuration_error = None
+    effective_create = can_create and configuration_error is None
     return DriveDestinationCapabilityResult(
         folder_id=folder.file_id,
         folder_name=folder.name,
+        storage_mode=selected_mode or (
+            DocumentStorageMode.SHARED_DRIVE
+            if destination_type == DriveDestinationType.SHARED_DRIVE
+            else DocumentStorageMode.OAUTH_USER
+        ),
         destination_type=destination_type,
         capability=(
             DrivePublishingCapability.CREATE_AVAILABLE
-            if can_create
+            if effective_create
             else DrivePublishingCapability.CREATE_NOT_AVAILABLE
         ),
         can_read=True,
-        can_create=can_create,
+        can_create=effective_create,
         can_update=bool(folder.capabilities.get("canEdit")),
         can_delete=folder.capabilities.get("canDelete"),
+        can_list=True,
+        can_retrieve_metadata=True,
         drive_id=folder.drive_id,
+        configuration_error=configuration_error,
     )
 
 
+def validate_document_storage_write(
+    provider: DocumentDriveProvider,
+    destination: DriveDestinationCapabilityResult,
+) -> DriveValidationResult:
+    """Create/read exactly one synthetic file only in an explicitly enabled mode."""
+    filename = "CASHCO_VALIDATION_TEST.txt"
+    content = b"CashCo document storage capability validation. No partner data.\n"
+    audit = ("DRIVE_CAPABILITY_CHECKED",)
+    if (
+        destination.storage_mode == DocumentStorageMode.DISABLED
+        or not destination.folder_id
+        or not destination.can_create
+    ):
+        return DriveValidationResult(
+            status=DriveValidationStatus.NOT_CONFIGURED,
+            filename=filename,
+            error_code=destination.configuration_error or "CREATE_NOT_AVAILABLE",
+            audit_events=audit,
+        )
+    try:
+        matches = tuple(
+            item
+            for item in provider.list_files(destination.folder_id)
+            if item.name == filename
+        )
+        if len(matches) > 1:
+            return DriveValidationResult(
+                status=DriveValidationStatus.FAIL,
+                filename=filename,
+                error_code="DUPLICATE_VALIDATION_FILES",
+                audit_events=audit,
+            )
+        created = False
+        if matches:
+            item = matches[0]
+        else:
+            item = provider.create_file(
+                destination.folder_id, filename, content, "text/plain"
+            )
+            created = True
+        read_back = provider.download_file(item.file_id) == content
+        metadata_ok = bool(item.file_id and item.name == filename)
+        if not read_back or not metadata_ok:
+            return DriveValidationResult(
+                status=DriveValidationStatus.FAIL,
+                filename=filename,
+                provider_file_id=item.file_id,
+                created=created,
+                read_back=read_back,
+                metadata_verified=metadata_ok,
+                error_code="VALIDATION_READBACK_FAILED",
+                audit_events=audit,
+            )
+        return DriveValidationResult(
+            status=(
+                DriveValidationStatus.PASS
+                if created
+                else DriveValidationStatus.ALREADY_VALIDATED
+            ),
+            filename=filename,
+            provider_file_id=item.file_id,
+            created=created,
+            read_back=True,
+            metadata_verified=True,
+            idempotent=not created,
+            audit_events=(
+                *audit,
+                "DRIVE_VALIDATION_FILE_CREATED"
+                if created
+                else "DRIVE_VALIDATION_FILE_REUSED",
+            ),
+        )
+    except (GoogleIntegrationError, RuntimeError, ValueError, OSError) as exc:
+        return DriveValidationResult(
+            status=DriveValidationStatus.FAIL,
+            filename=filename,
+            error_code=DocumentPublishingService._safe_error(exc),
+            audit_events=audit,
+        )
+
+
+def inspect_existing_document_storage_validation(
+    provider: DocumentDriveProvider,
+    destination: DriveDestinationCapabilityResult,
+) -> DriveValidationResult:
+    """Read-only check for the synthetic capability artifact."""
+    filename = "CASHCO_VALIDATION_TEST.txt"
+    content = b"CashCo document storage capability validation. No partner data.\n"
+    if (
+        destination.storage_mode == DocumentStorageMode.DISABLED
+        or not destination.folder_id
+    ):
+        return DriveValidationResult(
+            status=DriveValidationStatus.NOT_CONFIGURED,
+            filename=filename,
+            error_code=destination.configuration_error or "DOCUMENT_STORAGE_DISABLED",
+            audit_events=("DRIVE_CAPABILITY_CHECKED",),
+        )
+    try:
+        matches = tuple(
+            item
+            for item in provider.list_files(destination.folder_id)
+            if item.name == filename
+        )
+        if len(matches) != 1:
+            return DriveValidationResult(
+                status=DriveValidationStatus.NOT_CONFIGURED
+                if not matches
+                else DriveValidationStatus.FAIL,
+                filename=filename,
+                error_code=(
+                    "VALIDATION_FILE_NOT_FOUND"
+                    if not matches
+                    else "DUPLICATE_VALIDATION_FILES"
+                ),
+                audit_events=("DRIVE_CAPABILITY_CHECKED",),
+            )
+        item = matches[0]
+        read_back = provider.download_file(item.file_id) == content
+        return DriveValidationResult(
+            status=(
+                DriveValidationStatus.ALREADY_VALIDATED
+                if read_back
+                else DriveValidationStatus.FAIL
+            ),
+            filename=filename,
+            provider_file_id=item.file_id,
+            read_back=read_back,
+            metadata_verified=bool(item.file_id),
+            idempotent=read_back,
+            error_code=None if read_back else "VALIDATION_READBACK_FAILED",
+            audit_events=("DRIVE_CAPABILITY_CHECKED",),
+        )
+    except (GoogleIntegrationError, RuntimeError, ValueError, OSError) as exc:
+        return DriveValidationResult(
+            status=DriveValidationStatus.FAIL,
+            filename=filename,
+            error_code=DocumentPublishingService._safe_error(exc),
+            audit_events=("DRIVE_CAPABILITY_CHECKED",),
+        )
 class DocumentPublicationRepository:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -378,6 +594,7 @@ class FakeDocumentDriveProvider:
         self.fail_names = fail_names
         self.folders: dict[tuple[str, str], DriveFile] = {}
         self.created: list[str] = []
+        self.files: dict[str, tuple[DriveFile, bytes]] = {}
 
     def get_folder_metadata(self, folder_id: str) -> DriveFile:
         return self.root
@@ -397,7 +614,7 @@ class FakeDocumentDriveProvider:
         if name in self.fail_names:
             raise RuntimeError("FAKE_CREATE_FAILURE")
         self.created.append(name)
-        return self.root.model_copy(
+        item = self.root.model_copy(
             update={
                 "file_id": uuid5(NAMESPACE_URL, f"{folder_id}/{name}").hex,
                 "name": name,
@@ -406,3 +623,11 @@ class FakeDocumentDriveProvider:
                 "size": len(content),
             }
         )
+        self.files[item.file_id] = (item, content)
+        return item
+
+    def list_files(self, folder_id: str) -> tuple[DriveFile, ...]:
+        return tuple(item for item, _ in self.files.values())
+
+    def download_file(self, file_id: str) -> bytes:
+        return self.files[file_id][1]

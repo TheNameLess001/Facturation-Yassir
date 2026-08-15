@@ -9,19 +9,23 @@ import streamlit as st
 from src.auth import AuthService, Permission, RBACService
 from src.config import get_settings
 from src.documents.publishing import (
-    DocumentPublicationRepository,
+    DocumentStorageMode,
+    DriveValidationStatus,
     inspect_drive_destination,
+    inspect_existing_document_storage_validation,
 )
-from src.emails.gmail_adapter import inspect_gmail_capability
+from src.documents.storage import build_document_storage_service
+from src.emails.gmail_adapter import validate_gmail_capability
 from src.emails.period_locking import Phase10PeriodLockService
 from src.emails.phase10_authorization import PeriodAuthorizationService
 from src.emails.phase10_models import EmailAutomationMode
 from src.emails.runtime import load_email_center_snapshot
-from src.emails.sandbox import inspect_gmail_sandbox
+from src.emails.sandbox import SandboxDraftStatus, inspect_gmail_sandbox
 from src.emails.workflow_repository import EmailWorkflowRepository
 from src.google.auth import build_google_credentials
 from src.google.drive_service import GoogleDriveService
 from src.google.exceptions import GoogleIntegrationError
+from src.operations.go_live_runtime import build_go_live_snapshot
 from src.settlement.legacy_validation import LegacyFormulaRegistry
 from src.settlement.periods import SettlementPeriodService
 from src.settlement.phase5_runtime import load_phase5_workspace
@@ -49,18 +53,40 @@ except (GoogleIntegrationError, ValueError, OSError) as exc:
 repository = EmailWorkflowRepository(settings.email_workflow_registry_path)
 authorization = repository.active_authorization(period_code)
 period_mode = repository.mode_for_period(period_code)
-capability = inspect_gmail_capability(settings)
+capability = validate_gmail_capability(settings)
 sandbox = inspect_gmail_sandbox(settings)
+storage_mode = DocumentStorageMode(settings.document_storage_mode)
 try:
+    storage_drive = (
+        build_document_storage_service(settings)
+        if storage_mode != DocumentStorageMode.DISABLED
+        else GoogleDriveService(build_google_credentials(settings))
+    )
     drive_destination = inspect_drive_destination(
-        GoogleDriveService(build_google_credentials(settings)),
+        storage_drive,
         settings.documents_folder_id,
+        storage_mode=storage_mode,
+        shared_drive_id=settings.documents_shared_drive_id,
+    )
+    drive_validation = inspect_existing_document_storage_validation(
+        storage_drive, drive_destination
     )
 except (GoogleIntegrationError, ValueError, OSError):
-    drive_destination = None
-drive_create_denied = DocumentPublicationRepository(
-    settings.document_publication_registry_path
-).provider_create_denied()
+    source_drive = GoogleDriveService(build_google_credentials(settings))
+    drive_destination = inspect_drive_destination(
+        source_drive, None, storage_mode=storage_mode
+    )
+    drive_validation = None
+sandbox_drafts = repository.list_latest_sandbox_drafts(period_code)
+go_live = build_go_live_snapshot(
+    workspace,
+    settings=settings,
+    destination=drive_destination,
+    drive_validation=drive_validation,
+    gmail=capability,
+    sandbox=sandbox,
+    sandbox_draft=sandbox_drafts[-1] if sandbox_drafts else None,
+)
 st.markdown(
     f"""<div class="cc-off-banner"><div class="cc-off-title">AUTOMATION · {period_mode.value}</div>
     <div class="cc-off-copy">PRODUCTION SEND FLAG · {'ON' if settings.production_email_send_enabled else 'OFF'} · Current authorization: {'ACTIVE' if authorization else 'NONE'}</div></div>""",
@@ -92,19 +118,44 @@ render_kpis(
             "Drive Publishing",
             (
                 "READY"
-                if drive_destination
-                and drive_destination.can_create
-                and not drive_create_denied
+                if drive_validation
+                and drive_validation.status
+                in {
+                    DriveValidationStatus.PASS,
+                    DriveValidationStatus.ALREADY_VALIDATED,
+                }
                 else "BLOCKED"
             ),
-            drive_destination.destination_type.value if drive_destination else "UNAVAILABLE",
+            f"{storage_mode.value} · {drive_destination.destination_type.value}",
         ),
         ("Email Packages", "READY", f"{snapshot.email_ready:,} buildable"),
-        ("Gmail", capability.authentication.value, sandbox.auth_method.value),
+        ("Gmail Authentication", capability.authentication.value, sandbox.auth_method.value),
+        ("Sender", "READY" if sandbox.sender_configured else "BLOCKED", "Explicit company identity"),
+        (
+            "Sandbox Validation",
+            (
+                "READY"
+                if go_live.sandbox_draft
+                and go_live.sandbox_draft.status
+                in {
+                    SandboxDraftStatus.CREATED,
+                    SandboxDraftStatus.ALREADY_CREATED,
+                }
+                else "BLOCKED"
+            ),
+            "Draft-only provider test",
+        ),
         ("Authorization", "NOT AUTHORIZED", "Production count 0"),
-        ("Production Safety", "DISABLED", "Backend flag OFF"),
+        ("Production Flag", "OFF", "Backend hard stop"),
     ]
 )
+if go_live.readiness.status.value == "READY_FOR_GO_LIVE_AUTHORIZATION":
+    st.success("GO-LIVE · READY FOR AUTHORIZATION · Production SEND remains OFF")
+else:
+    st.error(
+        "GO-LIVE · BLOCKED · "
+        + " · ".join(item.value for item in go_live.readiness.blockers)
+    )
 
 st.markdown("### Authorization impact preview")
 render_kpis(

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
 from src.config import Settings
+from src.emails.gmail_adapter import GmailAdapter
 from src.emails.packages import EMAIL_PATTERN, normalize_email, stable_hash
 from src.emails.phase10_models import PartnerEmailPackage, RecipientStatus
+from src.models.domain import AuditEvent
 
 
 class GmailExecutionMode(StrEnum):
@@ -20,6 +24,37 @@ class GmailAuthMethod(StrEnum):
     SERVICE_ACCOUNT_WITHOUT_DELEGATION = "SERVICE_ACCOUNT_WITHOUT_DELEGATION"
     DOMAIN_WIDE_DELEGATION = "DOMAIN_WIDE_DELEGATION"
     OAUTH_USER = "OAUTH_USER"
+
+
+class SandboxDraftStatus(StrEnum):
+    PENDING = "PENDING"
+    CREATED = "CREATED"
+    FAILED = "FAILED"
+    ALREADY_CREATED = "ALREADY_CREATED"
+
+
+@dataclass(frozen=True)
+class SandboxDraftRecord:
+    draft_key: str
+    period_code: str
+    restaurant_id: str
+    recipient: str
+    source_package_hash: str
+    sandbox_package_hash: str
+    status: SandboxDraftStatus
+    created_at: datetime
+    provider_draft_id: str | None = None
+    error_code: str | None = None
+
+
+class SandboxDraftRepository(Protocol):
+    def claim_sandbox_draft(
+        self, record: SandboxDraftRecord
+    ) -> SandboxDraftRecord: ...
+
+    def record_sandbox_draft(self, record: SandboxDraftRecord) -> None: ...
+
+    def append_audit(self, event: AuditEvent) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -72,8 +107,7 @@ def inspect_gmail_sandbox(settings: Settings) -> GmailSandboxCapability:
             mode == GmailExecutionMode.SANDBOX
             and sender
             and recipient_valid
-            and settings.gmail_sandbox_allow_send
-            and settings.email_allow_send
+            and settings.gmail_sandbox_send_enabled
         ),
     )
 
@@ -130,3 +164,94 @@ class GmailSandboxPackageFactory:
                 "authorization_id": None,
             }
         )
+
+
+class GmailSandboxDraftService:
+    """Idempotent draft-only provider execution for an approved sandbox mailbox."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        repository: SandboxDraftRepository,
+        gmail: GmailAdapter,
+        *,
+        actor_id: str = "cashco.sandbox",
+    ) -> None:
+        self.settings = settings
+        self.repository = repository
+        self.gmail = gmail
+        self.actor_id = actor_id
+
+    def create_draft(
+        self,
+        package: PartnerEmailPackage,
+        attachments: tuple[bytes, ...],
+    ) -> SandboxDraftRecord:
+        capability = inspect_gmail_sandbox(self.settings)
+        if not capability.draft_execution_allowed:
+            raise PermissionError("GMAIL_SANDBOX_DRAFT_DISABLED")
+        if not attachments:
+            raise ValueError("GMAIL_SANDBOX_ATTACHMENT_REQUIRED")
+        sandbox_package = GmailSandboxPackageFactory().build(package, capability)
+        assert sandbox_package.recipient_to is not None
+        draft_key = stable_hash(
+            {
+                "sandbox_package_hash": sandbox_package.package_hash,
+                "attachments": [stable_hash(item.hex()) for item in attachments],
+            }
+        )
+        pending = SandboxDraftRecord(
+            draft_key=draft_key,
+            period_code=package.period_code,
+            restaurant_id=package.restaurant_id,
+            recipient=sandbox_package.recipient_to,
+            source_package_hash=package.package_hash,
+            sandbox_package_hash=sandbox_package.package_hash,
+            status=SandboxDraftStatus.PENDING,
+            created_at=datetime.now(UTC),
+        )
+        claimed = self.repository.claim_sandbox_draft(pending)
+        if claimed.status == SandboxDraftStatus.CREATED:
+            return SandboxDraftRecord(
+                **{
+                    **claimed.__dict__,
+                    "status": SandboxDraftStatus.ALREADY_CREATED,
+                }
+            )
+        if claimed != pending:
+            return claimed
+        try:
+            provider_id = self.gmail.create_draft(sandbox_package, attachments)
+            result = SandboxDraftRecord(
+                **{
+                    **pending.__dict__,
+                    "status": SandboxDraftStatus.CREATED,
+                    "provider_draft_id": provider_id,
+                }
+            )
+        except (RuntimeError, ValueError, OSError) as exc:
+            result = SandboxDraftRecord(
+                **{
+                    **pending.__dict__,
+                    "status": SandboxDraftStatus.FAILED,
+                    "error_code": type(exc).__name__.upper(),
+                }
+            )
+        self.repository.record_sandbox_draft(result)
+        if result.status == SandboxDraftStatus.CREATED:
+            self.repository.append_audit(
+                AuditEvent(
+                    event_type="GMAIL_SANDBOX_DRAFT_CREATED",
+                    actor_id=self.actor_id,
+                    period_id=package.period_code,
+                    restaurant_id=package.restaurant_id,
+                    entity_type="SANDBOX_EMAIL_PACKAGE",
+                    entity_id=str(sandbox_package.package_id),
+                    details={
+                        "package_hash": sandbox_package.package_hash,
+                        "draft_key": draft_key,
+                        "provider_draft_id": result.provider_draft_id,
+                    },
+                )
+            )
+        return result

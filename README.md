@@ -252,6 +252,37 @@ preview, Drive publication, sandbox package, Admin role, or authorization can
 bypass it. Production activation and real partner communication require a future
 explicit business-owner GO-LIVE decision.
 
+## Production Activation 5 — Go-Live infrastructure readiness
+
+Document storage must be explicitly selected with
+`CASHCO_DOCUMENT_STORAGE_MODE=SHARED_DRIVE` (preferred for the service account) or
+`OAUTH_USER` (approved company Google identity). The default is `DISABLED`. Shared
+Drive mode validates `CASHCO_DOCUMENTS_SHARED_DRIVE_ID` against the destination;
+OAuth authorized-user JSON is supplied only through the `GOOGLE_OAUTH_USER_JSON`
+secret. Source Google credentials and document-publishing credentials remain
+separate.
+
+An enabled destination must pass a single synthetic
+`CASHCO_VALIDATION_TEST.txt` creation/read-back/metadata test before a one-restaurant
+document rehearsal is allowed. The validation contains no partner data and is
+idempotent. CashCo does not retry the unsupported legacy My Drive architecture when
+storage mode remains disabled.
+
+Gmail supports an approved OAuth company user or Workspace domain-wide delegation.
+OAuth material is supplied through `GMAIL_OAUTH_USER_JSON`; delegated execution
+requires an explicit `CASHCO_GMAIL_DOMAIN_DELEGATED_USER` and company sender. Gmail
+remains `DISABLED` by default. Sandbox draft creation additionally requires
+`CASHCO_GMAIL_EXECUTION_MODE=SANDBOX`, an explicit
+`CASHCO_GMAIL_SANDBOX_RECIPIENT`, and draft flags. Sandbox delivery always replaces
+the production recipient and remains draft-only unless the separate
+`CASHCO_GMAIL_SANDBOX_SEND_ENABLED=true` flag is deliberately configured.
+
+`GoLiveReadinessPolicy` independently checks the financial policy, live Legal
+Master, settlement, rendering, tested document storage, email packages, Gmail
+authentication/sender, sandbox draft, Admin workflow, idempotency, audit, and the
+safe production flag. `READY_FOR_GO_LIVE_AUTHORIZATION` never means SEND is enabled;
+the production flag remains off until a separate business-owner instruction.
+
 ## Source discovery boundary
 
 The Data Sources page validates the real service-account connection, checks each active configured Drive location independently, inventories Admin Earnings sources, and maintains a metadata manifest. Overall readiness depends on Google authentication, Admin Earnings, Invoice Scope, RST List, and the required CashCo workspace folders. Finance Tracking has no effect. Settlement evaluation is read-only and in memory. Document preview is local and gated; no Google restaurant Sheet, Drive document publication, email, or payment workflow is enabled.
