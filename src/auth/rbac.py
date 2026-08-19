@@ -14,6 +14,11 @@ class Permission(StrEnum):
     SEND_EMAIL = "SEND_EMAIL"
     LOCK_PERIOD = "LOCK_PERIOD"
     CONFIGURE = "CONFIGURE"
+    PREPARE_PAYMENT_BATCH = "PREPARE_PAYMENT_BATCH"
+    VALIDATE_PAYMENT_BATCH = "VALIDATE_PAYMENT_BATCH"
+    EXPORT_PAYMENT_BATCH = "EXPORT_PAYMENT_BATCH"
+    RECORD_PAYMENT = "RECORD_PAYMENT"
+    RECONCILE_PAYMENT = "RECONCILE_PAYMENT"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -25,6 +30,11 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.ADJUST_ORDER,
             Permission.GENERATE_DOCUMENTS,
             Permission.PREVIEW_EMAIL,
+            Permission.PREPARE_PAYMENT_BATCH,
+            Permission.VALIDATE_PAYMENT_BATCH,
+            Permission.EXPORT_PAYMENT_BATCH,
+            Permission.RECORD_PAYMENT,
+            Permission.RECONCILE_PAYMENT,
         }
     ),
     Role.ADMIN: frozenset(Permission),
