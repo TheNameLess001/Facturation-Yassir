@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.config import Settings
+from src.documents.publishing import DocumentPublication
 from src.emails.attachments import StoredDocument
 
 
@@ -70,6 +71,29 @@ class CloudflareR2DocumentSource:
             period_code=metadata["period-code"],
             restaurant_id=metadata["restaurant-id"],
             financial_snapshot_hash=metadata["financial-snapshot-hash"],
+        )
+
+    def get_publication_document(
+        self, publication: DocumentPublication
+    ) -> StoredDocument:
+        """Load a registry-bound legacy R2 object without requiring extra metadata."""
+        if not publication.object_key:
+            raise ValueError("R2_OBJECT_KEY_MISSING")
+        response = self.client.get_object(
+            Bucket=self.bucket, Key=publication.object_key
+        )
+        content = response["Body"].read()
+        return StoredDocument(
+            object_key=publication.object_key,
+            content=content,
+            content_type=str(response.get("ContentType", "")),
+            content_hash=publication.document_hash,
+            document_id=str(publication.publication_id),
+            document_type=publication.document_type,
+            version=publication.document_version,
+            period_code=publication.period_code,
+            restaurant_id=publication.restaurant_id,
+            financial_snapshot_hash=publication.financial_snapshot_hash or "",
         )
 
     def put_pdf(self, object_key: str, content: bytes, metadata: dict[str, str]) -> str:

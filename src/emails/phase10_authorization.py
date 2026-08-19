@@ -76,7 +76,11 @@ class PeriodAuthorizationService:
             raise PermissionError("PERIOD_LOCKED")
         if mode == EmailAutomationMode.OFF:
             raise ValueError("OFF does not create an authorization")
-        expected = f"SEND {period_code}" if mode == EmailAutomationMode.SEND else f"AUTHORIZE {period_code}"
+        expected = (
+            f"SEND CASHCO {period_code}"
+            if mode == EmailAutomationMode.SEND
+            else f"AUTHORIZE {period_code}"
+        )
         if confirmation_text != expected:
             raise PermissionError(f"Typed confirmation must match {expected} exactly")
         settlement_hash, document_hash, email_hash = package_snapshot_hashes(packages)

@@ -87,8 +87,13 @@ class ProductionGmailAdapter:
 
 
 def inspect_gmail_capability(settings: Settings) -> GmailCapability:
+    delegated = bool(
+        settings.gmail_auth_mode == "DOMAIN_DELEGATION"
+        and settings.gmail_domain_delegated_user
+        and settings.google_credentials_configured
+    )
     configured = bool(
-        settings.gmail_auth_mode != "NOT_CONFIGURED"
+        (settings.gmail_oauth_configured or delegated)
         and settings.gmail_sender_email
         and settings.gmail_sender_email.strip()
     )

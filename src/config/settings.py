@@ -123,11 +123,22 @@ class Settings(BaseSettings):
     email_default_mode: Literal["OFF", "PREVIEW", "DRAFT", "SEND"] = "OFF"
     email_allow_drafts: bool = False
     email_allow_send: bool = False
-    production_email_send_enabled: bool = False
+    production_email_send_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "PRODUCTION_EMAIL_SEND_ENABLED",
+            "CASHCO_PRODUCTION_EMAIL_SEND_ENABLED",
+        ),
+    )
     gmail_auth_mode: Literal["NOT_CONFIGURED", "OAUTH", "DOMAIN_DELEGATION"] = (
         "NOT_CONFIGURED"
     )
-    gmail_sender_email: str | None = None
+    gmail_sender_email: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GMAIL_SENDER_EMAIL", "CASHCO_GMAIL_SENDER_EMAIL"
+        ),
+    )
     gmail_domain_delegated_user: str | None = None
     gmail_oauth_user_json: SecretStr | None = Field(
         default=None,
@@ -135,14 +146,48 @@ class Settings(BaseSettings):
             "GMAIL_OAUTH_USER_JSON", "CASHCO_GMAIL_OAUTH_USER_JSON"
         ),
     )
-    gmail_execution_mode: Literal["DISABLED", "SANDBOX", "PRODUCTION"] = "DISABLED"
-    gmail_sandbox_recipient: str | None = None
+    gmail_oauth_client_id: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GMAIL_OAUTH_CLIENT_ID", "CASHCO_GMAIL_OAUTH_CLIENT_ID"
+        ),
+    )
+    gmail_oauth_client_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GMAIL_OAUTH_CLIENT_SECRET", "CASHCO_GMAIL_OAUTH_CLIENT_SECRET"
+        ),
+    )
+    gmail_oauth_refresh_token: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GMAIL_OAUTH_REFRESH_TOKEN", "CASHCO_GMAIL_OAUTH_REFRESH_TOKEN"
+        ),
+    )
+    gmail_execution_mode: Literal["DISABLED", "SANDBOX", "PRODUCTION"] = Field(
+        default="DISABLED",
+        validation_alias=AliasChoices(
+            "GMAIL_EXECUTION_MODE", "CASHCO_GMAIL_EXECUTION_MODE"
+        ),
+    )
+    gmail_sandbox_recipient: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GMAIL_SANDBOX_RECIPIENT", "CASHCO_GMAIL_SANDBOX_RECIPIENT"
+        ),
+    )
     # Deprecated compatibility switches. Draft permission is now derived from
     # SANDBOX mode plus validated auth/sender/recipient; sending remains gated
     # exclusively by the explicit send flag below.
     gmail_sandbox_allow_drafts: bool = False
     gmail_sandbox_allow_send: bool = False
-    gmail_sandbox_send_enabled: bool = False
+    gmail_sandbox_send_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "GMAIL_SANDBOX_SEND_ENABLED",
+            "CASHCO_GMAIL_SANDBOX_SEND_ENABLED",
+        ),
+    )
     email_workflow_registry_path: Path = Path(
         "data/local/email_workflow_registry.sqlite3"
     )
@@ -174,6 +219,15 @@ class Settings(BaseSettings):
             self.audit_folder_id,
         )
         return all(value and value.strip() for value in required_ids)
+
+    @property
+    def gmail_oauth_configured(self) -> bool:
+        values = (
+            self.gmail_oauth_client_id,
+            self.gmail_oauth_client_secret,
+            self.gmail_oauth_refresh_token,
+        )
+        return all(value and value.get_secret_value().strip() for value in values)
 
     @property
     def r2_configured(self) -> bool:

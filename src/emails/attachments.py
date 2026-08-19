@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from src.documents.publishing import DocumentPublicationRepository
 from src.emails.phase10_models import DocumentAttachmentRef, PartnerEmailPackage
 
 PDF_CONTENT_TYPE = "application/pdf"
@@ -76,3 +77,38 @@ class R2AttachmentLoader:
             if not valid:
                 raise ValueError(code)
         return item.content
+
+
+class PublicationAttachmentLoader:
+    """Resolve exactly three current documents through the publication registry."""
+
+    def __init__(self, source: object, repository: DocumentPublicationRepository) -> None:
+        self.source = source
+        self.repository = repository
+
+    def load(self, package: PartnerEmailPackage) -> tuple[bytes, ...]:
+        expected = {"INVOICE", "NOTE_DE_DEBOURS", "PARTNER_STATEMENT"}
+        if {item.document_type for item in package.document_refs} != expected:
+            raise ValueError("EMAIL_PACKAGE_INCOMPLETE")
+        attachments: list[bytes] = []
+        for ref in package.document_refs:
+            publication = self.repository.current(
+                package.period_code, package.restaurant_id, ref.document_type
+            )
+            if (
+                publication is None
+                or str(publication.publication_id) != ref.document_id
+                or publication.document_version != ref.version
+                or publication.document_hash != ref.content_hash
+            ):
+                raise ValueError("EMAIL_DOCUMENT_STALE")
+            item = self.source.get_publication_document(publication)  # type: ignore[attr-defined]
+            if (
+                item.content_type != PDF_CONTENT_TYPE
+                or not item.content.startswith(b"%PDF-")
+                or hashlib.sha256(item.content).hexdigest() != ref.content_hash
+                or not item.content
+            ):
+                raise ValueError("EMAIL_ATTACHMENT_INVALID")
+            attachments.append(item.content)
+        return tuple(attachments)

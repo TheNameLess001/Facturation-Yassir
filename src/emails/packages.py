@@ -21,7 +21,9 @@ EMAIL_PATTERN = re.compile(
     r"(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$",
     re.IGNORECASE,
 )
-PRODUCTION_DOCUMENT_STATUSES = frozenset({"VALIDATED", "PRODUCTION_READY"})
+PRODUCTION_DOCUMENT_STATUSES = frozenset(
+    {"VALIDATED", "PRODUCTION_READY", "PUBLISHED"}
+)
 
 
 def stable_hash(value: Any) -> str:
@@ -70,7 +72,7 @@ def resolve_recipient(restaurant: RegisteredRestaurant) -> RecipientResolution:
 class PartnerEmailTemplate:
     @staticmethod
     def subject(period_code: str, restaurant_name: str) -> str:
-        return f"Yassir CashCo — Facturation {period_code} — {restaurant_name}"
+        return f"CashCo — Documents de règlement — {restaurant_name} — {period_code}"
 
     @staticmethod
     def body(period_code: str, restaurant_name: str) -> str:
@@ -78,6 +80,7 @@ class PartnerEmailTemplate:
             f"Bonjour {restaurant_name},\n\n"
             f"Veuillez trouver les documents de facturation CashCo relatifs à la "
             f"période {period_code}.\n\n"
+            "Pièces jointes : Facture Commission, Note de débours et Partner Statement.\n\n"
             "Cordialement,\nL’équipe Yassir CashCo"
         )
 

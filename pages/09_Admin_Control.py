@@ -226,7 +226,11 @@ elif mode == EmailAutomationMode.PREVIEW:
         )
         st.rerun()
 else:
-    expected = f"SEND {period_code}" if mode == EmailAutomationMode.SEND else f"AUTHORIZE {period_code}"
+    expected = (
+        f"SEND CASHCO {period_code}"
+        if mode == EmailAutomationMode.SEND
+        else f"AUTHORIZE {period_code}"
+    )
     phrase = st.text_input(f"Type {expected}")
     accepted = st.checkbox("I reviewed this exact immutable period snapshot.")
     packages = tuple(
