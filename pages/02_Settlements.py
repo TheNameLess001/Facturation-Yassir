@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
 
+from src.auth import AuthService
 from src.config import get_settings
+from src.documents.publishing import DocumentPublicationRepository
 from src.google.exceptions import GoogleIntegrationError
+from src.operations.billing import (
+    BillingImpactPreview,
+    BillingOperationsRepository,
+    BillingPeriodControlService,
+    BillingPeriodStatus,
+)
 from src.restaurants.registry_runtime import expire_partner_legal_master_cache
 from src.settlement.periods import SettlementPeriodService
 from src.settlement.phase5_models import (
@@ -161,10 +171,10 @@ def settlement_dialog(settlement: RestaurantSettlementEvaluation) -> None:
             st.success("No settlement-input issue was detected.")
 
 
-page_setup("Settlements")
-st.title("Settlement Period")
+page_setup("Billing Operations")
+st.title("Billing Operations Center")
 st.caption(
-    "P1 / P2 financial eligibility · Canonical Admin orders · Identity-ready scope only"
+    "P1 / P2 execution · settlement, review, documents, validation and controlled locking"
 )
 settings = get_settings()
 periods = SettlementPeriodService(settings.timezone)
@@ -218,7 +228,59 @@ except (GoogleIntegrationError, ValueError, OSError) as exc:
     st.error(f"Settlement evaluation is unavailable: {exc}")
     st.stop()
 
-st.markdown(f"### {result.period.display_name} · {result.period.status.value}")
+publication_repository = DocumentPublicationRepository(
+    settings.document_publication_registry_path
+)
+current_publications = tuple(
+    publication_repository.current(active_period, item.restaurant_id, document_type)
+    for item in result.restaurants
+    for document_type in ("INVOICE", "NOTE_DE_DEBOURS", "PARTNER_STATEMENT")
+)
+published_documents = sum(item is not None for item in current_publications)
+documents_ready = sum(
+    item.financial_policy_version == "cashco_legacy_v1"
+    and item.settlement_status == RestaurantSettlementStatus.READY
+    for item in result.restaurants
+)
+impact = BillingImpactPreview.from_summary(
+    result, document_count=documents_ready * 3
+)
+source_fingerprint = hashlib.sha256(
+    json.dumps(
+        [
+            (
+                item.restaurant_id,
+                str(item.sales_ttc),
+                str(item.invoice_ttc),
+                str(item.net_payable),
+                item.settlement_status.value,
+            )
+            for item in result.restaurants
+        ],
+        separators=(",", ":"),
+    ).encode()
+).hexdigest()
+billing_repository = BillingOperationsRepository(
+    settings.billing_operations_registry_path
+)
+billing_service = BillingPeriodControlService(billing_repository)
+stored_period = billing_repository.latest(active_period)
+if stored_period:
+    operational_status = stored_period.status
+elif published_documents == documents_ready * 3 and documents_ready:
+    operational_status = BillingPeriodStatus.DOCUMENTS_PUBLISHED
+elif result.manual_review_orders:
+    operational_status = BillingPeriodStatus.TO_REVIEW
+else:
+    operational_status = BillingPeriodStatus.DATA_READY
+
+st.markdown(
+    f"### {result.period.display_name} · {operational_status.value}"
+)
+st.caption(
+    f"{result.period.start_date:%d %b} → {result.period.end_date:%d %b} · "
+    f"Last settlement recompute: {result.generated_at:%Y-%m-%d %H:%M UTC}"
+)
 render_kpis(
     [
         ("Invoice Scope Restaurants", f"{len(result.restaurants):,}", "Identity-ready population"),
@@ -242,6 +304,122 @@ render_kpis(
         ),
     ]
 )
+
+st.markdown("### Billing funnel")
+funnel = pd.DataFrame(
+    [
+        ("Scope", result.identity_ready_restaurants + result.identity_blocked_restaurants),
+        ("Identity Ready", result.identity_ready_restaurants),
+        ("Orders in Period", result.restaurants_with_orders),
+        ("Settlement Evaluated", len(result.restaurants)),
+        ("Financial Ready", impact.restaurant_count),
+        (
+            "Review Required",
+            sum(item.manual_review_orders > 0 for item in result.restaurants),
+        ),
+        ("Documents Ready", documents_ready),
+        ("Fully Published", published_documents // 3),
+    ],
+    columns=["Stage", "Restaurants"],
+)
+st.bar_chart(funnel.set_index("Stage"), horizontal=True, color="#6747E8")
+
+st.markdown("### Period impact preview")
+render_kpis(
+    [
+        ("Sales TTC", f"{impact.sales_ttc:,.2f} MAD", "Certified snapshot"),
+        ("Sales HT", f"{impact.sales_ht:,.2f} MAD", "cashco_legacy_v1"),
+        ("Commission HT", f"{impact.commission_ht:,.2f} MAD", "No intermediate rounding"),
+        ("TVA", f"{impact.tva:,.2f} MAD", "20% certified"),
+        ("Invoice TTC", f"{impact.invoice_ttc:,.2f} MAD", "Publication impact"),
+        ("Net Payable", f"{impact.net_payable:,.2f} MAD", "Partner settlement"),
+    ]
+)
+if impact.reconciliation_difference:
+    st.error(
+        f"Financial reconciliation failed: {impact.reconciliation_difference:.2f} MAD"
+    )
+else:
+    st.success("Financial reconciliation · 0.00 MAD")
+
+st.markdown("### Safe period actions")
+action_tabs = st.tabs(
+    ["Refresh / Recalculate", "Validate Period", "Lock Period", "Reopen"]
+)
+with action_tabs[0]:
+    st.info(
+        "Refresh Sources and Recalculate Readiness use the controls above. "
+        "Generate Preview and R2 publication remain available in Documents."
+    )
+with action_tabs[1]:
+    validate_phrase = st.text_input(
+        f"Type VALIDATE {active_period}", key="billing_validate_phrase"
+    )
+    if st.button("Validate Period", disabled=validate_phrase != f"VALIDATE {active_period}"):
+        try:
+            billing_service.validate(
+                user=AuthService(settings).current_user(),
+                impact=impact,
+                source_fingerprint=source_fingerprint,
+                financial_policy_certified=True,
+                source_snapshot_available=True,
+                document_readiness_evaluated=True,
+                critical_structural_blockers=0,
+                review_items_classified=True,
+                confirmation_text=validate_phrase,
+            )
+        except (PermissionError, ValueError) as exc:
+            st.error(str(exc))
+        else:
+            st.success("Period validated. Blocked restaurants remain explicitly excluded.")
+            st.rerun()
+with action_tabs[2]:
+    lock_reason = st.text_area("Lock reason", key="billing_lock_reason")
+    lock_phrase = st.text_input(f"Type LOCK {active_period}", key="billing_lock_phrase")
+    if st.button(
+        "Lock Period",
+        disabled=not (lock_reason.strip() and lock_phrase == f"LOCK {active_period}"),
+    ):
+        try:
+            billing_service.lock(
+                user=AuthService(settings).current_user(),
+                impact=impact,
+                source_fingerprint=source_fingerprint,
+                publication_state_known=True,
+                confirmation_text=lock_phrase,
+                reason=lock_reason,
+            )
+        except (PermissionError, ValueError) as exc:
+            st.error(str(exc))
+        else:
+            st.success("Period locked.")
+            st.rerun()
+with action_tabs[3]:
+    reopen_reason = st.text_area("Reopen reason", key="billing_reopen_reason")
+    reopen_phrase = st.text_input(
+        f"Type REOPEN {active_period}", key="billing_reopen_phrase"
+    )
+    if st.button(
+        "Reopen Period",
+        disabled=not (
+            reopen_reason.strip() and reopen_phrase == f"REOPEN {active_period}"
+        ),
+    ):
+        try:
+            billing_service.reopen(
+                user=AuthService(settings).current_user(),
+                impact=impact,
+                source_fingerprint=source_fingerprint,
+                confirmation_text=reopen_phrase,
+                reason=reopen_reason,
+            )
+        except (PermissionError, ValueError) as exc:
+            st.error(str(exc))
+        else:
+            st.success("Period reopened through a controlled audit event.")
+            st.rerun()
+if billing_service.source_changed_after_lock(active_period, source_fingerprint):
+    st.error("SOURCE_CHANGED_AFTER_LOCK · Controlled reopen is required.")
 render_kpis(
     [
         ("Orders", f"{result.settlement_evaluated_orders:,}", "Identity-ready scope"),
@@ -313,4 +491,24 @@ st.info(
     "Monetary calculations use certified policy cashco_legacy_v1. System decisions and "
     "append-only manual overrides remain independently auditable."
 )
-st.warning("AUTOMATION OFF · WAITING FOR ADMIN AUTHORIZATION")
+st.markdown("### Historical billing periods")
+st.dataframe(
+    pd.DataFrame(
+        [
+            {
+                "Period": item.period_code,
+                "Restaurants": item.impact.restaurant_count,
+                "Sales TTC": item.impact.sales_ttc,
+                "Invoice TTC": item.impact.invoice_ttc,
+                "Net Payable": item.impact.net_payable,
+                "Documents": item.impact.document_count,
+                "Status": item.status.value,
+                "Validated / Locked At": item.occurred_at,
+            }
+            for item in billing_repository.history()
+        ]
+    ),
+    hide_index=True,
+    width="stretch",
+)
+st.warning("GMAIL DEFERRED · PAYMENT EXECUTION DEFERRED")

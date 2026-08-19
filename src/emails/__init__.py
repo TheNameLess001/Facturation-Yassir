@@ -1,3 +1,4 @@
+from .attachments import R2AttachmentLoader, R2DocumentSource, StoredDocument
 from .authorization import AutomationAuthorizationService
 from .gmail_adapter import (
     FakeGmailAdapter,
@@ -29,6 +30,9 @@ __all__ = [
     "ProductionGmailAdapter",
     "ProductionReadinessInput",
     "ProductionReadinessPolicy",
+    "R2AttachmentLoader",
+    "R2DocumentSource",
+    "StoredDocument",
     "inspect_gmail_capability",
     "resolve_recipient",
 ]

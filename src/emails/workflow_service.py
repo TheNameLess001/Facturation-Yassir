@@ -83,6 +83,7 @@ class Phase10EmailWorkflowService:
             self.settings.email_allow_send
             and self.settings.production_email_send_enabled
         ):
+            self._audit("PRODUCTION_SEND_BLOCKED", user, package)
             raise ProductionSendDisabledError(
                 ReadinessBlocker.PRODUCTION_SEND_DISABLED.value
             )

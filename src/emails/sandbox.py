@@ -62,6 +62,7 @@ class GmailSandboxCapability:
     execution_mode: GmailExecutionMode
     auth_method: GmailAuthMethod
     sender_configured: bool
+    authentication_configured: bool
     sandbox_recipient: str | None
     sandbox_recipient_valid: bool
     draft_execution_allowed: bool
@@ -71,6 +72,7 @@ class GmailSandboxCapability:
     def sandbox_available(self) -> bool:
         return bool(
             self.execution_mode == GmailExecutionMode.SANDBOX
+            and self.authentication_configured
             and self.sender_configured
             and self.sandbox_recipient_valid
         )
@@ -89,22 +91,27 @@ def inspect_gmail_sandbox(settings: Settings) -> GmailSandboxCapability:
     recipient_valid = bool(recipient and EMAIL_PATTERN.fullmatch(recipient))
     mode = GmailExecutionMode(settings.gmail_execution_mode)
     sender = bool(settings.gmail_sender_email and settings.gmail_sender_email.strip())
+    auth_configured = method in {
+        GmailAuthMethod.OAUTH_USER,
+        GmailAuthMethod.DOMAIN_WIDE_DELEGATION,
+    }
     return GmailSandboxCapability(
         execution_mode=mode,
         auth_method=method,
         sender_configured=sender,
+        authentication_configured=auth_configured,
         sandbox_recipient=recipient,
         sandbox_recipient_valid=recipient_valid,
         draft_execution_allowed=bool(
             mode == GmailExecutionMode.SANDBOX
+            and auth_configured
             and sender
             and recipient_valid
-            and settings.gmail_sandbox_allow_drafts
-            and settings.email_allow_drafts
         ),
         # Sandbox SEND requires a future, separate authorization. It is false by default.
         send_execution_allowed=bool(
             mode == GmailExecutionMode.SANDBOX
+            and auth_configured
             and sender
             and recipient_valid
             and settings.gmail_sandbox_send_enabled
@@ -125,11 +132,11 @@ class GmailSandboxPackageFactory:
         recipient = capability.sandbox_recipient
         subject = f"[TEST CASHCO] {package.subject}"
         body = (
-            "TEST / DRY RUN — aucune communication partenaire.\n\n"
+            "TEST / DRY RUN — SANDBOX, aucune communication partenaire.\n\n"
             f"Restaurant d'origine: {package.restaurant_name}\n"
-            f"Restaurant ID: {package.restaurant_id}\n"
             f"Période: {package.period_code}\n\n"
-            "Ce message valide uniquement l'architecture CashCo."
+            "Documents: Facture Commission, Note de Débours, Partner Statement.\n\n"
+            "Ce brouillon valide uniquement l'architecture CashCo."
         )
         content_hash = stable_hash(
             {
@@ -220,6 +227,17 @@ class GmailSandboxDraftService:
             )
         if claimed != pending:
             return claimed
+        self.repository.append_audit(
+            AuditEvent(
+                event_type="GMAIL_SANDBOX_PACKAGE_BUILT",
+                actor_id=self.actor_id,
+                period_id=package.period_code,
+                restaurant_id=package.restaurant_id,
+                entity_type="SANDBOX_EMAIL_PACKAGE",
+                entity_id=str(sandbox_package.package_id),
+                details={"package_hash": sandbox_package.package_hash},
+            )
+        )
         try:
             provider_id = self.gmail.create_draft(sandbox_package, attachments)
             result = SandboxDraftRecord(

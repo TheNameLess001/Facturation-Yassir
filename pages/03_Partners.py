@@ -10,6 +10,7 @@ from src.restaurants.registry_runtime import (
     expire_partner_legal_master_cache,
     run_restaurant_registry,
 )
+from src.restaurants.scope_registry import invoice_scope_schema_health
 from src.ui.layout import page_setup, render_kpis
 
 
@@ -315,10 +316,27 @@ if event.selection.rows:
 
 with st.expander("Real source schema profiles"):
     active = registry.invoice_scope_profile.active
+    schema_health = invoice_scope_schema_health(list(active.columns))
     st.markdown("**Invoice Scope**")
     st.caption(
         f"Workbook: {registry.invoice_scope_profile.filename} · "
         f"Active worksheet: {active.worksheet_name} · Rows: {active.row_count:,}"
+    )
+    st.success(
+        "CONNECTED · Required schema: PASS"
+        if schema_health["required_schema_pass"]
+        else "CONNECTED · Required schema: BLOCKED"
+    )
+    st.caption(
+        "Restaurant Name: optional field provided by Invoice Scope"
+        if schema_health["restaurant_name_provided"]
+        else "Optional fields: Restaurant Name not provided · Identity enrichment: RST"
+    )
+    st.caption(
+        f"Canonical IDs: {registry.scope_rows_with_restaurant_id:,} · "
+        f"Commission coverage: "
+        f"{sum(item.invoice_scope_commission_rate is not None for item in registry.restaurants):,}"
+        f"/{len(registry.restaurants):,} · Commission authority: Invoice Scope"
     )
     st.write(list(active.columns))
     st.markdown("**RST List**")

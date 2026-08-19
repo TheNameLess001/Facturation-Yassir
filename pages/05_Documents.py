@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import calendar
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -7,7 +8,9 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
+from src.auth import AuthService
 from src.config import get_settings
+from src.documents.archive import SecureDocumentAccessService, SQLiteDocumentAudit
 from src.documents.legal_readiness import (
     DocumentLegalPolicy,
     DocumentLegalStatus,
@@ -20,13 +23,8 @@ from src.documents.phase8 import (
 from src.documents.publishing import (
     DocumentPublicationRepository,
     DocumentPublishingService,
-    DocumentStorageMode,
-    inspect_drive_destination,
-    inspect_existing_document_storage_validation,
 )
-from src.documents.storage import build_document_storage_service
-from src.google.auth import build_google_credentials
-from src.google.drive_service import GoogleDriveService
+from src.documents.r2_storage import CloudflareR2DocumentSource, R2ConfigurationError
 from src.google.exceptions import GoogleIntegrationError
 from src.restaurants.legal_master import PartnerLegalMasterSource
 from src.settlement.legacy_validation import LegacyFormulaRegistry
@@ -42,6 +40,83 @@ from src.ui.layout import page_setup, render_kpis
 @st.cache_data(ttl=300, show_spinner="Preparing document readiness…")
 def load_document_workspace(period_code: str):
     return load_phase5_workspace(period_code)
+
+
+@st.dialog("Secure document", width="large")
+def published_document_dialog(publication) -> None:
+    settings = get_settings()
+    st.markdown(f"### {publication.document_type} · v{publication.document_version}")
+    st.caption(
+        f"{publication.restaurant_id} · {publication.period_code} · Cloudflare R2"
+    )
+    st.write(
+        {
+            "Status": publication.status.value,
+            "Published at": publication.published_at,
+            "Storage": "PRIVATE",
+            "Signed URL expiry": f"{settings.r2_signed_url_expiry_seconds} seconds",
+        }
+    )
+    try:
+        provider = CloudflareR2DocumentSource.from_settings(settings)
+        repository = DocumentPublicationRepository(
+            settings.document_publication_registry_path
+        )
+        access = SecureDocumentAccessService(
+            provider,
+            repository,
+            expiry_seconds=settings.r2_signed_url_expiry_seconds,
+            audit=SQLiteDocumentAudit(repository),
+        )
+    except R2ConfigurationError:
+        st.error("Secure document storage is not configured.")
+        return
+    user = AuthService(settings).current_user()
+    if st.button("View PDF", type="primary"):
+        st.session_state["document_secure_view_url"] = access.view_url(
+            user, publication
+        )
+    url = st.session_state.get("document_secure_view_url")
+    if url:
+        st.link_button("Open secure PDF", url)
+        st.caption("This private link expires automatically and is never stored.")
+    if st.button("Prepare secure download"):
+        st.session_state["document_secure_download"] = access.download(
+            user, publication
+        )
+    download = st.session_state.get("document_secure_download")
+    if download:
+        st.download_button(
+            "Download PDF",
+            data=download,
+            file_name=f"{publication.document_type.lower()}_v{publication.document_version}.pdf",
+            mime="application/pdf",
+        )
+    history = DocumentPublicationRepository(
+        settings.document_publication_registry_path
+    ).history(
+        publication.period_code,
+        publication.restaurant_id,
+        publication.document_type,
+    )
+    st.markdown("#### Version history")
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Version": f"v{item.document_version}",
+                    "Status": item.status.value,
+                    "Published At": item.published_at,
+                    "Storage": item.provider,
+                }
+                for item in sorted(
+                    history, key=lambda value: value.document_version, reverse=True
+                )
+            ]
+        ),
+        hide_index=True,
+        width="stretch",
+    )
 
 
 @st.dialog("Document preview", width="large")
@@ -90,16 +165,21 @@ def document_preview_dialog(restaurant, settlement) -> None:
         )
     with financial:
         st.write(preview.readiness.model_dump())
-    st.markdown("#### Rendered document")
-    st.components.v1.html(rendered.content.decode("utf-8"), height=620, scrolling=True)
+    st.markdown("#### Rendered PDF")
+    encoded = base64.b64encode(rendered.content).decode("ascii")
+    st.components.v1.html(
+        f'<iframe src="data:application/pdf;base64,{encoded}" width="100%" height="620"></iframe>',
+        height=640,
+        scrolling=False,
+    )
     st.download_button(
-        "Download validated HTML preview",
+        "Download validated PDF preview",
         data=rendered.content,
         file_name=rendered.filename,
         mime=rendered.mime_type,
     )
     st.caption(
-        "Preview only. No Drive file is created and no production document number is reserved."
+        "Preview only. No R2 object is created and no production document number is reserved."
     )
 
 
@@ -157,7 +237,7 @@ def legal_review_dialog(restaurant, settlement) -> None:
             "Financial Status": settlement.settlement_status.value,
             "Financial Policy": settlement.financial_policy_version,
             "Document Readiness": readiness.status.value,
-            "Drive Publishing": Phase8DocumentEngine.DRIVE_PUBLISHING_STATUS,
+            "Document Storage": "R2 · publication state shown separately",
         }
     )
     st.caption("No source field can be edited from this review dialog.")
@@ -165,7 +245,9 @@ def legal_review_dialog(restaurant, settlement) -> None:
 
 page_setup("Documents")
 st.title("Document Engine")
-st.caption("Versioned rendering · Immutable publishing · No automatic production action")
+st.caption(
+    "Versioned rendering · Immutable publishing · No automatic production action"
+)
 settings = get_settings()
 periods = SettlementPeriodService(settings.timezone)
 today = datetime.now(ZoneInfo(settings.timezone)).date()
@@ -216,52 +298,28 @@ document_candidates = {
 publication_repository = DocumentPublicationRepository(
     settings.document_publication_registry_path
 )
-storage_mode = DocumentStorageMode(settings.document_storage_mode)
-try:
-    storage_drive = (
-        build_document_storage_service(settings)
-        if storage_mode != DocumentStorageMode.DISABLED
-        else GoogleDriveService(build_google_credentials(settings))
-    )
-    destination = inspect_drive_destination(
-        storage_drive,
-        settings.documents_folder_id,
-        storage_mode=storage_mode,
-        shared_drive_id=settings.documents_shared_drive_id,
-    )
-    storage_validation = inspect_existing_document_storage_validation(
-        storage_drive, destination
-    )
-except (GoogleIntegrationError, ValueError, OSError):
-    destination = None
-    storage_validation = None
+storage_mode = "R2" if settings.r2_configured else "DISABLED"
 
 st.markdown("### Publishing control")
 render_kpis(
     [
-        ("Storage Mode", storage_mode.value, "Explicit external configuration"),
+        ("Provider", "Cloudflare R2", "Google Drive publishing deprecated"),
         (
-            "Drive",
-            destination.destination_type.value if destination else "UNAVAILABLE",
-            destination.folder_name if destination and destination.folder_name else "Not resolved",
+            "Bucket",
+            settings.r2_bucket or "NOT CONFIGURED",
+            "Private object storage",
         ),
         (
-            "Create",
-            (
-                "AVAILABLE" if destination and destination.can_create else "NOT AVAILABLE"
-            ),
-            (
-                storage_validation.status.value
-                if storage_validation
-                else "Validation not run"
-            ),
+            "Signed viewing",
+            "READY" if settings.r2_configured else "BLOCKED",
+            f"Expiry {settings.r2_signed_url_expiry_seconds // 60} min",
         ),
-        ("Production", "NOT AUTHORIZED", "Go-Live authorization required"),
+        ("Private", "YES", "No permanent public URL"),
     ]
 )
 st.caption(
-    "Readiness and publishing are independent. This page performs metadata reads and "
-    "local rendering only; it never starts a Drive publication automatically."
+    "Readiness and publication are independent. PDF bytes and signed URLs are loaded "
+    "only after an explicit View or Download request."
 )
 render_kpis(
     [
@@ -281,7 +339,11 @@ render_kpis(
             f"{sum(item.status != DocumentReadinessStatus.READY for item in readiness.values()):,}",
             "Financial, legal, or formula gate",
         ),
-        ("Generated", "0", "Drive creation disabled"),
+        (
+            "Total PDFs",
+            f"{len([item for item in publication_repository.list_latest_for_period(period_code) if item.provider == 'R2' and item.status.value in {'PUBLISHED', 'SUPERSEDED'}]):,}",
+            "Current period archive",
+        ),
     ]
 )
 
@@ -290,12 +352,146 @@ st.success(
     "Legal, review, commission and data-quality gates remain independent."
 )
 
+latest_publications = tuple(
+    item
+    for item in publication_repository.list_latest_for_period(period_code)
+    if item.provider == "R2"
+)
+current_publications = tuple(
+    item
+    for item in latest_publications
+    if item.status.value in {"PUBLISHED", "FAILED", "ALREADY_PUBLISHED"}
+)
+published_by_restaurant: dict[str, set[str]] = {}
+failed_restaurants: set[str] = set()
+for item in current_publications:
+    if item.status.value in {"PUBLISHED", "ALREADY_PUBLISHED"}:
+        published_by_restaurant.setdefault(item.restaurant_id, set()).add(
+            item.document_type
+        )
+    elif item.status.value == "FAILED":
+        failed_restaurants.add(item.restaurant_id)
+fully_published = sum(len(types) == 3 for types in published_by_restaurant.values())
+partially_published = sum(
+    0 < len(types) < 3 for types in published_by_restaurant.values()
+)
+render_kpis(
+    [
+        ("Fully Published", f"{fully_published:,}", "All three PDFs verified"),
+        ("Partially Published", f"{partially_published:,}", "At least one PDF missing"),
+        ("Publication Failed", f"{len(failed_restaurants):,}", "Retry available"),
+        (
+            "Invoices",
+            f"{sum(item.document_type == 'INVOICE' and item.status.value == 'PUBLISHED' for item in current_publications):,}",
+            "R2 verified",
+        ),
+        (
+            "Notes de débours",
+            f"{sum(item.document_type == 'NOTE_DE_DEBOURS' and item.status.value == 'PUBLISHED' for item in current_publications):,}",
+            "R2 verified",
+        ),
+        (
+            "Statements",
+            f"{sum(item.document_type == 'PARTNER_STATEMENT' and item.status.value == 'PUBLISHED' for item in current_publications):,}",
+            "R2 verified",
+        ),
+        (
+            "Storage Health",
+            "CONNECTED" if settings.r2_configured else "BLOCKED",
+            "Metadata-only page load",
+        ),
+    ]
+)
+
+st.markdown("### Document archive")
+archive_filters = st.columns(6)
+city_filter = archive_filters[0].selectbox(
+    "City", ["ALL", *sorted({item.city for item in restaurants.values() if item.city})]
+)
+restaurant_filter = archive_filters[1].selectbox(
+    "Restaurant", ["ALL", *sorted(restaurants)]
+)
+type_filter = archive_filters[2].selectbox(
+    "Document Type", ["ALL", *(item.value for item in CashCoDocumentType)]
+)
+status_filter = archive_filters[3].selectbox(
+    "Publication Status", ["ALL", "PUBLISHED", "FAILED", "SUPERSEDED"]
+)
+versions = sorted({item.document_version for item in latest_publications})
+version_filter = archive_filters[4].selectbox("Version", ["ALL", *versions])
+search_filter = archive_filters[5].text_input("Search")
+archive_rows = []
+archive_items = []
+for item in latest_publications:
+    restaurant = restaurants.get(item.restaurant_id)
+    name = restaurant.restaurant_name if restaurant else item.restaurant_id
+    city = restaurant.city if restaurant else None
+    if city_filter != "ALL" and city != city_filter:
+        continue
+    if restaurant_filter != "ALL" and item.restaurant_id != restaurant_filter:
+        continue
+    if type_filter != "ALL" and item.document_type != type_filter:
+        continue
+    if status_filter != "ALL" and item.status.value != status_filter:
+        continue
+    if version_filter != "ALL" and item.document_version != version_filter:
+        continue
+    if (
+        search_filter
+        and search_filter.casefold()
+        not in f"{name} {item.restaurant_id} {item.document_type}".casefold()
+    ):
+        continue
+    archive_items.append(item)
+    archive_rows.append(
+        {
+            "Restaurant": name,
+            "Restaurant ID": item.restaurant_id,
+            "Period": item.period_code,
+            "Document Type": item.document_type,
+            "Version": f"v{item.document_version}",
+            "Publication Status": item.status.value,
+            "Published At": item.published_at,
+            "Storage": item.provider,
+            "View / Download": "Open secure document",
+        }
+    )
+if archive_rows:
+    archive_event = st.dataframe(
+        pd.DataFrame(archive_rows),
+        hide_index=True,
+        width="stretch",
+        on_select="rerun",
+        selection_mode="single-row",
+        key="document_archive_table",
+    )
+    if archive_event.selection.rows:
+        published_document_dialog(archive_items[archive_event.selection.rows[0]])
+else:
+    st.info("No published document matches the selected archive filters.")
+
+st.markdown("### Period document control")
+control_columns = st.columns(4)
+control_columns[0].button("Generate Preview", help="Local PDF generation only")
+control_columns[1].button(
+    "Publish Ready Documents",
+    disabled=True,
+    help="Use the controlled ADMIN confirmation workflow",
+)
+control_columns[2].button("Retry Failed", disabled=not failed_restaurants)
+control_columns[3].button("Refresh Status")
+st.caption(
+    f"Bulk publication requires ADMIN confirmation: PUBLISH {period_code}. "
+    "Delete, overwrite and mass replace are intentionally unavailable."
+)
+
 
 def publication_status(candidate):
     stored = publication_repository.latest(
         DocumentPublishingService.publication_key(candidate)
     )
     return stored.status.value if stored else "NOT_PUBLISHED"
+
 
 rows = [
     {
@@ -323,9 +519,7 @@ rows = [
         "Version": document_candidates[restaurant_id][
             CashCoDocumentType.INVOICE
         ].document_version,
-        "Financial Validation": (
-            "READY" if item.settlement_final else "REVIEW"
-        ),
+        "Financial Validation": ("READY" if item.settlement_final else "REVIEW"),
         "Legal Readiness": item.legal_status.value,
         "Status": item.status.value,
     }
@@ -340,7 +534,14 @@ if publication_filter == "PUBLISHED":
     visible_rows = [
         row
         for row in rows
-        if any(row[key] in {"PUBLISHED", "ALREADY_PUBLISHED"} for key in ("Invoice Publishing", "Débours Publishing", "Statement Publishing"))
+        if any(
+            row[key] in {"PUBLISHED", "ALREADY_PUBLISHED"}
+            for key in (
+                "Invoice Publishing",
+                "Débours Publishing",
+                "Statement Publishing",
+            )
+        )
     ]
 elif publication_filter == "FAILED":
     visible_rows = [row for row in rows if "FAILED" in row.values()]
@@ -433,9 +634,7 @@ for restaurant_id, restaurant in restaurants.items():
     invoice_legal = by_type[CashCoDocumentType.INVOICE]
     blockers = tuple(
         dict.fromkeys(
-            field
-            for item in by_type.values()
-            for field in item.missing_required_fields
+            field for item in by_type.values() for field in item.missing_required_fields
         )
     )
     legal_rows.append(
@@ -481,8 +680,7 @@ formula_registry = LegacyFormulaRegistry()
 report = formula_registry.evidence_report()
 certification = formula_registry.certification()
 st.caption(
-    "Source · 4_Generateur bulk.py · PRODUCTION_SOURCE_CODE · "
-    "BUSINESS_OWNER_CONFIRMED"
+    "Source · 4_Generateur bulk.py · PRODUCTION_SOURCE_CODE · BUSINESS_OWNER_CONFIRMED"
 )
 render_kpis(
     [
@@ -492,14 +690,22 @@ render_kpis(
             "Approved monetary policy",
         ),
         ("Evidence", "AUTHORITATIVE", "Production source code"),
-        ("Parity Cases", str(certification.parity_cases), "Optional regression evidence"),
+        (
+            "Parity Cases",
+            str(certification.parity_cases),
+            "Optional regression evidence",
+        ),
         (
             "Source Reconstructions",
             str(certification.source_reconstructed_cases),
             "Optional additional validation",
         ),
         ("Matches", str(certification.parity_matches), "Exact legacy precision"),
-        ("Mismatches", str(certification.parity_mismatches), "Never silently tolerated"),
+        (
+            "Mismatches",
+            str(certification.parity_mismatches),
+            "Never silently tolerated",
+        ),
         ("Certification", certification.status.value, "Production hard gate"),
     ]
 )
@@ -514,7 +720,9 @@ st.dataframe(
                 "Source": item.source_file,
                 "Location": item.source_location,
                 "Confidence": item.confidence.value,
-                "Evidence Type": item.evidence_type.value if item.evidence_type else "—",
+                "Evidence Type": item.evidence_type.value
+                if item.evidence_type
+                else "—",
                 "Business Approval": item.approval.value,
                 "Category": item.category.value if item.category else "—",
                 "Status": "CERTIFIED",
@@ -584,5 +792,7 @@ with st.expander("Import a local historical reference · no persistence"):
                 hide_index=True,
                 width="stretch",
             )
-            st.success("Inspected in memory. Nothing was uploaded to Drive or committed.")
+            st.success(
+                "Inspected in memory. Nothing was uploaded to Drive or committed."
+            )
 st.warning("AUTOMATION OFF · No document implies Admin authorization")

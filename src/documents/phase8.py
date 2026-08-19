@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import html
 import json
+import re
+import unicodedata
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import ClassVar
@@ -103,7 +104,7 @@ class RenderedDocument(BaseModel):
     document_type: CashCoDocumentType
     document_version: int
     filename: str
-    mime_type: str = "text/html"
+    mime_type: str = "application/pdf"
     content: bytes
     document_hash: str
 
@@ -340,18 +341,18 @@ class Phase8DocumentEngine:
             settlement.sales_ttc is not None
             and settlement.net_payable is not None
             and settlement.invoice_ttc is not None
-            and settlement.sales_ttc
-            != settlement.net_payable + settlement.invoice_ttc
+            and settlement.sales_ttc != settlement.net_payable + settlement.invoice_ttc
         ):
             issues.append("NET_PAYABLE_RECONCILIATION_FAILED")
-        snapshot_hash = self._stable_hash(settlement.model_dump(mode="json"))
+        snapshot_hash = self._stable_hash(
+            self._without_runtime_timestamps(settlement.model_dump(mode="json"))
+        )
         financial_snapshot_hash = self._stable_hash(
             {
                 "financial_policy_version": preview.financial_policy_version,
                 "commission": preview.content.get("commission"),
                 **{
-                    field: preview.content.get(field)
-                    for field in self.FINANCIAL_FIELDS
+                    field: preview.content.get(field) for field in self.FINANCIAL_FIELDS
                 },
             }
         )
@@ -384,7 +385,8 @@ class Phase8DocumentEngine:
             document_type=document_type,
             document_version=version,
             document_reference=preview.document_key,
-            financial_policy_version=preview.financial_policy_version or "NOT_VALIDATED",
+            financial_policy_version=preview.financial_policy_version
+            or "NOT_VALIDATED",
             settlement_snapshot_hash=snapshot_hash,
             financial_snapshot_hash=financial_snapshot_hash,
             legal_snapshot_hash=legal_snapshot_hash,
@@ -427,6 +429,7 @@ class Phase8DocumentEngine:
             certification=self.certification,
             policy=self.policy,
         )
+
         def present(value: object, field: str) -> str | None:
             if value is None:
                 return None
@@ -442,12 +445,8 @@ class Phase8DocumentEngine:
             "invoice_ht": present(calculated.invoice_ht, "invoice_ht"),
             "invoice_tva": present(calculated.invoice_tva, "invoice_tva"),
             "invoice_ttc": present(calculated.invoice_ttc, "invoice_ttc"),
-            "note_de_debours": present(
-                calculated.disbursement_note, "note_de_debours"
-            ),
-            "final_net_payable": present(
-                calculated.net_payable, "final_net_payable"
-            ),
+            "note_de_debours": present(calculated.disbursement_note, "note_de_debours"),
+            "final_net_payable": present(calculated.net_payable, "final_net_payable"),
         }
 
     @staticmethod
@@ -463,7 +462,7 @@ class Phase8DocumentEngine:
     def render_production_document(
         cls, candidate: ProductionDocumentCandidate
     ) -> RenderedDocument:
-        """Render deterministic, self-contained HTML; calculations stay upstream."""
+        """Render a deterministic PDF; all calculations stay upstream."""
         content = candidate.content
         labels = {
             CashCoDocumentType.INVOICE: "FACTURE COMMISSION",
@@ -492,31 +491,38 @@ class Phase8DocumentEngine:
             ),
         }
 
-        def safe(value: object) -> str:
-            return html.escape(str(value or "—"), quote=True)
-
-        financial_rows = "".join(
-            f"<tr><th>{safe(label)}</th><td>{safe(content.get(field))} MAD</td></tr>"
+        lines = [
+            "YASSIR CASHCO",
+            labels[candidate.document_type],
+            f"Periode: {candidate.period_code}",
+            f"Reference: {candidate.document_reference}",
+            "",
+            f"Partenaire: {content.get('partner') or '-'}",
+            f"Restaurant ID: {candidate.restaurant_id}",
+            f"Adresse: {content.get('address') or '-'}",
+        ]
+        lines.extend(
+            f"{label}: {content.get(field) or '-'} MAD"
             for label, field in rows_by_type[candidate.document_type]
         )
-        optional_legal = "".join(
-            f"<span><strong>{safe(label)}:</strong> {safe(content.get(field))}</span>"
+        if candidate.document_type == CashCoDocumentType.INVOICE:
+            lines.insert(8, f"Taux de commission: {content.get('commission') or '-'} %")
+        lines.extend(
+            f"{label}: {content.get(field)}"
             for label, field in (("ICE", "ice"), ("IF", "if"), ("RC", "rc"))
             if content.get(field)
         )
-        watermark = (
-            ""
-            if candidate.status == ProductionDocumentStatus.PRODUCTION_READY
-            else '<div class="watermark">DRAFT · NOT VALIDATED</div>'
+        lines.extend(
+            (
+                "",
+                f"Version: v{candidate.document_version}",
+                f"Politique financiere: {candidate.financial_policy_version}",
+                "Document valide par les controles CashCo",
+            )
         )
-        markup = f"""<!doctype html>
-<html lang="fr"><head><meta charset="utf-8"><title>{safe(labels[candidate.document_type])}</title>
-<style>body{{font:14px Arial,sans-serif;color:#17213b;margin:48px}}header{{border-bottom:3px solid #6941c6;padding-bottom:18px}}h1{{font-size:24px}}.meta{{color:#667085}}.watermark{{padding:10px;margin-bottom:20px;background:#fff0ef;color:#b42318;font-weight:700;text-align:center}}.legal{{display:grid;gap:6px;margin:28px 0}}table{{width:100%;border-collapse:collapse;margin-top:24px}}th,td{{padding:12px;border-bottom:1px solid #e4e7ec;text-align:left}}td{{text-align:right;font-variant-numeric:tabular-nums}}footer{{margin-top:42px;color:#667085;font-size:11px}}</style></head>
-<body>{watermark}<header><div class="meta">Yassir CashCo · {safe(candidate.period_code)}</div><h1>{safe(labels[candidate.document_type])}</h1><div>Référence: {safe(candidate.document_reference)}</div></header>
-<section class="legal"><strong>{safe(content.get('partner'))}</strong><span>Restaurant ID: {safe(candidate.restaurant_id)}</span><span>Adresse: {safe(content.get('address'))}</span>{optional_legal}</section>
-<table>{financial_rows}</table>
-<footer>Version {candidate.document_version} · Politique financière {safe(candidate.financial_policy_version)} · Document validé par les contrôles CashCo</footer></body></html>"""
-        payload = markup.encode("utf-8")
+        if candidate.status != ProductionDocumentStatus.PRODUCTION_READY:
+            lines.insert(0, "DRAFT - NOT VALIDATED")
+        payload = cls._build_pdf(lines)
         suffix = {
             CashCoDocumentType.INVOICE: "facture_commission",
             CashCoDocumentType.NOTE_DE_DEBOURS: "note_de_debours",
@@ -529,11 +535,57 @@ class Phase8DocumentEngine:
             document_version=candidate.document_version,
             filename=(
                 f"{candidate.period_code}_{candidate.restaurant_id}_{suffix}_"
-                f"v{candidate.document_version}.html"
+                f"v{candidate.document_version}.pdf"
             ),
             content=payload,
             document_hash=hashlib.sha256(payload).hexdigest(),
         )
+
+    @staticmethod
+    def _build_pdf(lines: list[str]) -> bytes:
+        """Build a small standards-compliant one-page PDF without external assets."""
+
+        def pdf_text(value: str) -> str:
+            normalized = unicodedata.normalize("NFKD", value)
+            ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+            return re.sub(
+                r"[\\()\r\n]", lambda match: "\\" + match.group(0), ascii_value
+            )
+
+        commands = ["BT", "/F1 11 Tf", "54 790 Td", "14 TL"]
+        for index, line in enumerate(lines):
+            if index:
+                commands.append("T*")
+            commands.append(f"({pdf_text(str(line))}) Tj")
+        commands.append("ET")
+        stream = "\n".join(commands).encode("ascii")
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+            b"<< /Length "
+            + str(len(stream)).encode()
+            + b" >>\nstream\n"
+            + stream
+            + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ]
+        payload = bytearray(b"%PDF-1.7\n%CashCo\n")
+        offsets = [0]
+        for number, obj in enumerate(objects, start=1):
+            offsets.append(len(payload))
+            payload.extend(f"{number} 0 obj\n".encode())
+            payload.extend(obj)
+            payload.extend(b"\nendobj\n")
+        xref = len(payload)
+        payload.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+        payload.extend(b"0000000000 65535 f \n")
+        for offset in offsets[1:]:
+            payload.extend(f"{offset:010d} 00000 n \n".encode())
+        payload.extend(
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+        )
+        return bytes(payload)
 
     @staticmethod
     def _stable_hash(value: object) -> str:
@@ -544,3 +596,19 @@ class Phase8DocumentEngine:
             separators=(",", ":"),
         ).encode()
         return hashlib.sha256(payload).hexdigest()
+
+    @classmethod
+    def _without_runtime_timestamps(cls, value: object) -> object:
+        """Remove execution timestamps while preserving every business field."""
+        volatile = {"created_at", "generated_at", "occurred_at", "processed_at"}
+        if isinstance(value, dict):
+            return {
+                key: cls._without_runtime_timestamps(item)
+                for key, item in value.items()
+                if key not in volatile
+            }
+        if isinstance(value, list):
+            return [cls._without_runtime_timestamps(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(cls._without_runtime_timestamps(item) for item in value)
+        return value

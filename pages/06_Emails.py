@@ -63,6 +63,8 @@ def email_detail(row) -> None:
 
 
 settings = get_settings()
+capability = inspect_gmail_capability(settings)
+sandbox = inspect_gmail_sandbox(settings)
 periods = SettlementPeriodService(settings.timezone)
 today = datetime.now(ZoneInfo(settings.timezone)).date()
 latest = periods.latest_complete(as_of=today)
@@ -133,7 +135,17 @@ frame = pd.DataFrame(
             "Restaurant": row.restaurant,
             "Restaurant ID": row.restaurant_id,
             "Period": snapshot.period_code,
-            "Recipient": row.recipient or "—",
+            "Production Recipient": row.recipient or "—",
+            "Sandbox Recipient": sandbox.sandbox_recipient or "—",
+            "Actual delivery target": (
+                sandbox.sandbox_recipient
+                if sandbox.execution_mode.value == "SANDBOX"
+                else "NONE"
+            ),
+            "Documents": len(row.package.document_refs),
+            "Package Status": row.package.workflow_status.value,
+            "Gmail Mode": sandbox.execution_mode.value,
+            "Draft Status": "NOT_RUN",
             "Financial Status": row.financial_status,
             "Document Status": row.document_status,
             "Email Status": row.email_status,
@@ -154,8 +166,6 @@ event = st.dataframe(
 if event.selection.rows:
     email_detail(rows[event.selection.rows[0]])
 
-capability = inspect_gmail_capability(settings)
-sandbox = inspect_gmail_sandbox(settings)
 with st.expander("Gmail capability · configuration only"):
     st.write(
         {

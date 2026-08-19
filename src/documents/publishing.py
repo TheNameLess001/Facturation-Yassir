@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sqlite3
 from datetime import UTC, datetime
@@ -49,7 +50,9 @@ class DocumentPublicationStatus(StrEnum):
     PUBLISHING = "PUBLISHING"
     PUBLISHED = "PUBLISHED"
     FAILED = "FAILED"
+    STORAGE_VERIFICATION_FAILED = "STORAGE_VERIFICATION_FAILED"
     ALREADY_PUBLISHED = "ALREADY_PUBLISHED"
+    SUPERSEDED = "SUPERSEDED"
 
 
 class DriveDestinationCapabilityResult(BaseModel):
@@ -102,6 +105,16 @@ class DocumentPublication(BaseModel):
     document_version: int
     document_hash: str
     provider: str
+    storage_bucket: str | None = None
+    object_key: str | None = None
+    etag: str | None = None
+    size_bytes: int | None = None
+    financial_snapshot_hash: str | None = None
+    legal_snapshot_hash: str | None = None
+    settlement_snapshot_hash: str | None = None
+    financial_policy_version: str | None = None
+    content_hash: str | None = None
+    created_at: datetime | None = None
     provider_file_id: str | None = None
     provider_folder_id: str | None = None
     published_at: datetime | None = None
@@ -207,7 +220,8 @@ def inspect_drive_destination(
     return DriveDestinationCapabilityResult(
         folder_id=folder.file_id,
         folder_name=folder.name,
-        storage_mode=selected_mode or (
+        storage_mode=selected_mode
+        or (
             DocumentStorageMode.SHARED_DRIVE
             if destination_type == DriveDestinationType.SHARED_DRIVE
             else DocumentStorageMode.OAUTH_USER
@@ -369,6 +383,8 @@ def inspect_existing_document_storage_validation(
             error_code=DocumentPublishingService._safe_error(exc),
             audit_events=("DRIVE_CAPABILITY_CHECKED",),
         )
+
+
 class DocumentPublicationRepository:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -386,6 +402,16 @@ class DocumentPublicationRepository:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_document_publication_key "
                 "ON document_publications(publication_key)"
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS document_audit_events (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL
+                )
+                """
             )
 
     def append(self, publication: DocumentPublication) -> None:
@@ -411,7 +437,9 @@ class DocumentPublicationRepository:
             ).fetchall()
         return tuple(
             item
-            for item in (DocumentPublication.model_validate_json(row[0]) for row in rows)
+            for item in (
+                DocumentPublication.model_validate_json(row[0]) for row in rows
+            )
             if item.period_code == period_code
         )
 
@@ -422,6 +450,70 @@ class DocumentPublicationRepository:
         for item in self.list_for_period(period_code):
             latest[item.publication_key] = item
         return tuple(latest[key] for key in sorted(latest))
+
+    def history(
+        self, period_code: str, restaurant_id: str, document_type: str
+    ) -> tuple[DocumentPublication, ...]:
+        latest: dict[str, DocumentPublication] = {}
+        for item in self.list_for_period(period_code):
+            if (
+                item.restaurant_id == restaurant_id
+                and item.document_type == document_type
+            ):
+                latest[item.publication_key] = item
+        return tuple(
+            item
+            for item in latest.values()
+            if item.status
+            in {
+                DocumentPublicationStatus.PUBLISHED,
+                DocumentPublicationStatus.SUPERSEDED,
+            }
+        )
+
+    def current(
+        self, period_code: str, restaurant_id: str, document_type: str
+    ) -> DocumentPublication | None:
+        items = [
+            item
+            for item in self.history(period_code, restaurant_id, document_type)
+            if item.status == DocumentPublicationStatus.PUBLISHED
+        ]
+        return max(items, key=lambda item: item.document_version, default=None)
+
+    def supersede(self, publication: DocumentPublication) -> DocumentPublication:
+        result = publication.model_copy(
+            update={"status": DocumentPublicationStatus.SUPERSEDED}
+        )
+        self.append(result)
+        return result
+
+    def append_document_audit(
+        self, event_type: str, details: dict[str, object]
+    ) -> None:
+        forbidden = {"bytes", "content", "signed_url", "url", "credentials", "token"}
+        safe = {
+            key: value
+            for key, value in details.items()
+            if key.casefold() not in forbidden
+        }
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO document_audit_events(event_type, payload, occurred_at) "
+                "VALUES (?, ?, ?)",
+                (
+                    event_type,
+                    json.dumps(safe, sort_keys=True, separators=(",", ":")),
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+
+    def list_document_audit(self) -> tuple[tuple[str, dict[str, object]], ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT event_type, payload FROM document_audit_events ORDER BY sequence"
+            ).fetchall()
+        return tuple((row[0], json.loads(row[1])) for row in rows)
 
     def provider_create_denied(self) -> bool:
         with self._connect() as connection:
@@ -463,27 +555,48 @@ class DocumentPublishingService:
         publications = tuple(self._publish_one(item) for item in candidates)
         return DocumentPublicationBatchResult(
             requested=len(publications),
-            published=sum(item.status == DocumentPublicationStatus.PUBLISHED for item in publications),
-            already_published=sum(item.status == DocumentPublicationStatus.ALREADY_PUBLISHED for item in publications),
-            failed=sum(item.status == DocumentPublicationStatus.FAILED for item in publications),
-            not_published=sum(item.status == DocumentPublicationStatus.NOT_PUBLISHED for item in publications),
+            published=sum(
+                item.status == DocumentPublicationStatus.PUBLISHED
+                for item in publications
+            ),
+            already_published=sum(
+                item.status == DocumentPublicationStatus.ALREADY_PUBLISHED
+                for item in publications
+            ),
+            failed=sum(
+                item.status
+                in {
+                    DocumentPublicationStatus.FAILED,
+                    DocumentPublicationStatus.STORAGE_VERIFICATION_FAILED,
+                }
+                for item in publications
+            ),
+            not_published=sum(
+                item.status == DocumentPublicationStatus.NOT_PUBLISHED
+                for item in publications
+            ),
             publications=publications,
             audit_events=tuple(
                 {
                     DocumentPublicationStatus.PUBLISHED: "DOCUMENT_PUBLISHED",
                     DocumentPublicationStatus.ALREADY_PUBLISHED: "DOCUMENT_ALREADY_PUBLISHED",
                     DocumentPublicationStatus.FAILED: "DOCUMENT_PUBLISH_FAILED",
+                    DocumentPublicationStatus.STORAGE_VERIFICATION_FAILED: "DOCUMENT_PUBLISH_FAILED",
                     DocumentPublicationStatus.NOT_PUBLISHED: "DOCUMENT_RENDERED",
                 }[item.status]
                 for item in publications
             ),
         )
 
-    def _publish_one(self, candidate: ProductionDocumentCandidate) -> DocumentPublication:
+    def _publish_one(
+        self, candidate: ProductionDocumentCandidate
+    ) -> DocumentPublication:
         key = self.publication_key(candidate)
         existing = self.repository.latest(key)
         if existing and existing.status == DocumentPublicationStatus.PUBLISHED:
-            return existing.model_copy(update={"status": DocumentPublicationStatus.ALREADY_PUBLISHED})
+            return existing.model_copy(
+                update={"status": DocumentPublicationStatus.ALREADY_PUBLISHED}
+            )
         base = DocumentPublication(
             publication_id=uuid5(NAMESPACE_URL, key),
             publication_key=key,
@@ -589,7 +702,9 @@ class DocumentPublishingService:
 class FakeDocumentDriveProvider:
     """In-memory provider used by tests; it has no external side effects."""
 
-    def __init__(self, root: DriveFile, *, fail_names: frozenset[str] = frozenset()) -> None:
+    def __init__(
+        self, root: DriveFile, *, fail_names: frozenset[str] = frozenset()
+    ) -> None:
         self.root = root
         self.fail_names = fail_names
         self.folders: dict[tuple[str, str], DriveFile] = {}

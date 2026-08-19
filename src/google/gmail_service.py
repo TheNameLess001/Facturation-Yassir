@@ -70,8 +70,8 @@ class GoogleGmailService:
         for index, content in enumerate(attachments, start=1):
             message.add_attachment(
                 content,
-                maintype="text",
-                subtype="html",
-                filename=f"cashco-document-{index}.html",
+                maintype="application",
+                subtype="pdf",
+                filename=f"cashco-document-{index}.pdf",
             )
         return base64.urlsafe_b64encode(message.as_bytes()).decode()

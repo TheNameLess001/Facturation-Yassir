@@ -61,6 +61,29 @@ class Settings(BaseSettings):
     document_storage_mode: Literal["DISABLED", "SHARED_DRIVE", "OAUTH_USER"] = (
         "DISABLED"
     )
+    document_storage_provider: Literal["DISABLED", "R2"] = "DISABLED"
+    r2_endpoint_url: str | None = Field(
+        default=None, validation_alias=AliasChoices("R2_ENDPOINT", "CASHCO_R2_ENDPOINT_URL")
+    )
+    r2_bucket: str | None = Field(
+        default=None, validation_alias=AliasChoices("R2_BUCKET_NAME", "CASHCO_R2_BUCKET")
+    )
+    r2_access_key_id: SecretStr | None = Field(
+        default=None, validation_alias=AliasChoices("R2_ACCESS_KEY_ID", "CASHCO_R2_ACCESS_KEY_ID")
+    )
+    r2_secret_access_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("R2_SECRET_ACCESS_KEY", "CASHCO_R2_SECRET_ACCESS_KEY"),
+    )
+    r2_signed_url_expiry_seconds: int = Field(
+        default=300,
+        ge=60,
+        le=900,
+        validation_alias=AliasChoices(
+            "R2_SIGNED_URL_EXPIRY_SECONDS",
+            "CASHCO_R2_SIGNED_URL_EXPIRY_SECONDS",
+        ),
+    )
     documents_shared_drive_id: str | None = None
     audit_folder_id: str | None = None
     document_registry_path: Path = Path("data/local/document_registry.sqlite3")
@@ -114,12 +137,19 @@ class Settings(BaseSettings):
     )
     gmail_execution_mode: Literal["DISABLED", "SANDBOX", "PRODUCTION"] = "DISABLED"
     gmail_sandbox_recipient: str | None = None
+    # Deprecated compatibility switches. Draft permission is now derived from
+    # SANDBOX mode plus validated auth/sender/recipient; sending remains gated
+    # exclusively by the explicit send flag below.
     gmail_sandbox_allow_drafts: bool = False
     gmail_sandbox_allow_send: bool = False
     gmail_sandbox_send_enabled: bool = False
     email_workflow_registry_path: Path = Path(
         "data/local/email_workflow_registry.sqlite3"
     )
+    billing_operations_registry_path: Path = Path(
+        "data/local/billing_operations_registry.sqlite3"
+    )
+    review_registry_path: Path = Path("data/local/review_registry.sqlite3")
 
     @property
     def google_credentials_configured(self) -> bool:
@@ -144,6 +174,15 @@ class Settings(BaseSettings):
             self.audit_folder_id,
         )
         return all(value and value.strip() for value in required_ids)
+
+    @property
+    def r2_configured(self) -> bool:
+        return bool(
+            self.r2_endpoint_url
+            and self.r2_bucket
+            and self.r2_access_key_id
+            and self.r2_secret_access_key
+        )
 
 
 @lru_cache

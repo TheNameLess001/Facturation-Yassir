@@ -49,6 +49,7 @@ def build_go_live_snapshot(
     sandbox: GmailSandboxCapability,
     drive_validation: DriveValidationResult | None = None,
     sandbox_draft: SandboxDraftRecord | None = None,
+    document_storage_ready: bool | None = None,
 ) -> GoLiveOperationalSnapshot:
     email = build_email_center_snapshot(workspace, settings=settings)
     legal_source = workspace.registry.partner_legal_master
@@ -65,11 +66,15 @@ def build_go_live_snapshot(
         and legal_source.status
         == LegalMasterSyncStatus.CONNECTED
     )
-    storage_ready = bool(
-        destination.can_create
-        and drive_validation
-        and drive_validation.status
-        in {DriveValidationStatus.PASS, DriveValidationStatus.ALREADY_VALIDATED}
+    storage_ready = (
+        document_storage_ready
+        if document_storage_ready is not None
+        else bool(
+            destination.can_create
+            and drive_validation
+            and drive_validation.status
+            in {DriveValidationStatus.PASS, DriveValidationStatus.ALREADY_VALIDATED}
+        )
     )
     sandbox_ready = bool(
         sandbox_draft

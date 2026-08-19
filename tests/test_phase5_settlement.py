@@ -250,7 +250,7 @@ def test_commission_scope_precedence_equivalence_and_mismatch() -> None:
 
 def test_missing_scope_commission_blocks_even_when_rst_has_reference() -> None:
     result = evaluate(
-        [{"Column 1": "Ready", "Restaurant ID": "R1"}],
+        [{"Column 1": "Ready", "Restaurant ID": "R1", "Commission": None}],
         [rst_row("R1", "Ready", commission="20")],
         [order("O1", "R1", "2026-08-10")],
     )

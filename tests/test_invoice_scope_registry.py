@@ -8,6 +8,7 @@ from src.restaurants.registry_models import (
 )
 from src.restaurants.scope_registry import (
     RestaurantRegistryBuilder,
+    invoice_scope_schema_health,
     normalize_restaurant_name,
 )
 from src.restaurants.source_reader import RestaurantSourceReader
@@ -27,6 +28,11 @@ def build(
     aliases: dict[str, str] | None = None,
     order_counts: dict[str, int] | None = None,
 ):
+    scope = scope.copy()
+    if "Restaurant ID" not in scope.columns:
+        scope["Restaurant ID"] = None
+    if "Commission" not in scope.columns:
+        scope["Commission"] = "0.20"
     scope_profile, rst_profile = profiles(scope, rst)
     return RestaurantRegistryBuilder().build(
         scope,
@@ -191,7 +197,9 @@ def test_duplicate_scope_status_does_not_hide_unmatched_identity() -> None:
 
 
 def test_standalone_and_missing_quality_fields() -> None:
-    scope = pd.DataFrame([{"Column 1": "Standalone", "Restaurant ID": "123"}])
+    scope = pd.DataFrame(
+        [{"Column 1": "Standalone", "Restaurant ID": "123", "Commission": None}]
+    )
     rst = pd.DataFrame(
         [
             complete_rst(
@@ -211,7 +219,7 @@ def test_standalone_and_missing_quality_fields() -> None:
     restaurant = result.restaurants[0]
     assert restaurant.is_chain is False
     assert restaurant.admin_orders_available is False
-    assert restaurant.data_quality_status == DataQualityStatus.WARNING
+    assert restaurant.data_quality_status == DataQualityStatus.BLOCKING
     assert set(restaurant.issue_codes) >= {
         "MISSING_EMAIL",
         "MISSING_RIB",
@@ -229,6 +237,77 @@ def test_invoice_scope_commission_is_retained_when_rst_commission_is_missing() -
     result = build(scope, rst)
     assert str(result.restaurants[0].commission_rate) == "0.22"
     assert "MISSING_COMMISSION" not in result.restaurants[0].issue_codes
+
+
+def test_invoice_scope_name_is_optional_and_resolved_from_rst_by_exact_id() -> None:
+    scope = pd.DataFrame([{"Restaurant ID": "123", "Commission": "0.22"}])
+    result = build(scope, pd.DataFrame([complete_rst()]))
+    restaurant = result.restaurants[0]
+    assert restaurant.restaurant_name == "O'Tacos Ziraoui"
+    assert restaurant.mapping_status == MappingStatus.MATCHED_BY_ID
+    assert restaurant.field_lineage["restaurant_name"].source == "RST_LIST"
+
+
+def test_invoice_scope_name_remains_supported_when_present() -> None:
+    scope = pd.DataFrame(
+        [
+            {
+                "Restaurant Name": "O'Tacos Ziraoui",
+                "Restaurant ID": "123",
+                "Commission": "0.22",
+            }
+        ]
+    )
+    result = build(scope, pd.DataFrame([complete_rst()]))
+    assert result.restaurants[0].restaurant_name == "O'Tacos Ziraoui"
+
+
+def test_invoice_scope_required_columns_remain_strict() -> None:
+    rst = pd.DataFrame([complete_rst()])
+    for scope, missing in (
+        (pd.DataFrame([{"Commission": "0.22"}]), "Restaurant ID"),
+        (pd.DataFrame([{"Restaurant ID": "123"}]), "Commission"),
+    ):
+        scope_profile, rst_profile = profiles(scope, rst)
+        try:
+            RestaurantRegistryBuilder().build(
+                scope,
+                rst,
+                invoice_scope_profile=scope_profile,
+                rst_profile=rst_profile,
+            )
+        except ValueError as exc:
+            assert missing in str(exc)
+        else:
+            raise AssertionError(f"Missing {missing} column must block the source")
+
+
+def test_missing_commission_value_blocks_without_rst_fallback() -> None:
+    scope = pd.DataFrame(
+        [{"Restaurant ID": "123", "Commission": None}]
+    )
+    result = build(scope, pd.DataFrame([complete_rst()]))
+    restaurant = result.restaurants[0]
+    assert restaurant.commission_rate is None
+    assert restaurant.rst_commission_rate is not None
+    assert restaurant.data_quality_status == DataQualityStatus.BLOCKING
+    assert "MISSING_COMMISSION" in restaurant.issue_codes
+
+
+def test_schema_health_reports_optional_name_and_safe_aliases_only() -> None:
+    health = invoice_scope_schema_health(["Restaurant ID", "Commission", "P"])
+    assert health == {
+        "required_schema_pass": True,
+        "missing_required": (),
+        "restaurant_name_provided": False,
+        "restaurant_name_source": "RST",
+    }
+    assert invoice_scope_schema_health(
+        ["Restaurant ID", "Commission", "Restaurant Name"]
+    )["restaurant_name_provided"] is True
+    assert invoice_scope_schema_health(
+        ["Restaurant ID", "Commission", "Display Label"]
+    )["restaurant_name_provided"] is False
 
 
 def test_scope_explicit_false_field_is_not_in_registry() -> None:

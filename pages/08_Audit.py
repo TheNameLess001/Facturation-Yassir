@@ -1,161 +1,178 @@
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import streamlit as st
 
 from src.config import get_settings
 from src.documents.publishing import DocumentPublicationRepository
-from src.emails.workflow_repository import EmailWorkflowRepository
 from src.google.exceptions import GoogleIntegrationError
-from src.restaurants.registry_runtime import run_restaurant_registry
-from src.settlement.overrides import FinancialOverrideRepository
+from src.operations.reporting import BillingExportService, BillingReportingService
+from src.operations.review import ReviewCenterBuilder, ReviewRepository, ReviewStatus
+from src.settlement.periods import SettlementPeriodService
+from src.settlement.phase5_runtime import load_phase5_workspace
 from src.ui.layout import page_setup, render_kpis
 
-page_setup("Audit")
-st.title("Immutable Audit Trail")
-st.caption("Financial overrides are append-only and cannot be deleted through CashCo.")
 
-period_code = st.selectbox(
-    "Settlement period",
-    ["2026-07-P2", "2026-07-P1"],
+@st.cache_data(ttl=300, show_spinner="Building billing reports…")
+def load_reporting_workspace(period_code: str):
+    return load_phase5_workspace(period_code)
+
+
+settings = get_settings()
+period_service = SettlementPeriodService(settings.timezone)
+today = datetime.now(ZoneInfo(settings.timezone)).date()
+latest = period_service.latest_complete(as_of=today)
+options = [
+    latest.period_code,
+    "2026-07-P2",
+    "2026-07-P1",
+]
+options = list(dict.fromkeys(options))
+
+page_setup("Reports & Audit", period_code=options[0])
+st.title("Billing Reporting & Audit Center")
+st.caption(
+    "Financial, operational and document reporting from certified settlement snapshots."
 )
-repository = FinancialOverrideRepository(
-    get_settings().financial_override_registry_path
-)
-overrides = repository.list_for_period(period_code)
-email_repository = EmailWorkflowRepository(
-    get_settings().email_workflow_registry_path
-)
-email_events = email_repository.list_audit(period_code)
-document_publications = DocumentPublicationRepository(
-    get_settings().document_publication_registry_path
-).list_for_period(period_code)
+
+period_code, comparable_code = st.columns(2)
+with period_code:
+    selected_period = st.selectbox("Period", options)
+with comparable_code:
+    comparable_period = st.selectbox(
+        "Compare with", [value for value in options if value != selected_period]
+    )
+
 try:
-    legal_snapshot = run_restaurant_registry().partner_legal_master
-    legal_events = legal_snapshot.audit_events if legal_snapshot else ()
-except (GoogleIntegrationError, ValueError, OSError):
-    legal_events = ()
+    workspace = load_reporting_workspace(selected_period)
+    comparable_workspace = load_reporting_workspace(comparable_period)
+except (GoogleIntegrationError, ValueError, OSError) as exc:
+    st.error(f"Billing reporting is temporarily unavailable: {exc}")
+    st.stop()
+
+reporting = BillingReportingService()
+report = reporting.financial(workspace.summary)
+comparable = reporting.financial(comparable_workspace.summary)
+comparison = reporting.compare(report, comparable)
+publication_repository = DocumentPublicationRepository(
+    settings.document_publication_registry_path
+)
+publications = publication_repository.list_latest_for_period(selected_period)
+document_report = reporting.documents(publications)
+review_repository = ReviewRepository(settings.review_registry_path)
+review_items = ReviewCenterBuilder().build(
+    workspace, publications, review_repository
+)
+open_issues = tuple(
+    item
+    for item in review_items
+    if item.status in {ReviewStatus.OPEN, ReviewStatus.IN_REVIEW}
+)
+
+st.subheader("Certified financial view")
 render_kpis(
     [
-        ("Financial Overrides", f"{len(overrides):,}", "Append-only records"),
-        (
-            "Orders Adjusted",
-            f"{len({item.order_id for item in overrides}):,}",
-            "Latest override drives final decision",
-        ),
-        (
-            "Superseding Overrides",
-            f"{sum(item.supersedes_override_id is not None for item in overrides):,}",
-            "History retained",
-        ),
-        ("Deleted", "0", "No delete operation exists"),
-        ("Email Workflow Events", f"{len(email_events):,}", "Operational metadata only"),
-        (
-            "Document Events",
-            f"{len(document_publications):,}",
-            "Immutable publication attempts",
-        ),
-        ("Legal Master Events", f"{len(legal_events):,}", "No legal values recorded"),
+        ("Sales TTC", f"{report.sales_ttc:,.2f} MAD", f"{report.order_count:,} orders"),
+        ("Sales HT", f"{report.sales_ht:,.2f} MAD", "cashco_legacy_v1"),
+        ("Commission HT", f"{report.commission_ht:,.2f} MAD", "Certified snapshot"),
+        ("TVA", f"{report.tva:,.2f} MAD", "20% policy"),
+        ("Invoice TTC", f"{report.invoice_ttc:,.2f} MAD", "Billing total"),
+        ("Net Payable", f"{report.net_payable:,.2f} MAD", "Partner settlement"),
+        ("Restaurants", f"{report.restaurant_count:,}", "Financially calculable"),
+        ("Open Reviews", f"{len(open_issues):,}", "Central review queue"),
     ]
 )
-st.markdown("### Override history")
-st.dataframe(
-    pd.DataFrame(
-        [
-            {
-                "Override ID": item.override_id,
-                "Period": item.period_code,
-                "Restaurant ID": item.restaurant_id,
-                "Order ID": item.order_id,
-                "Previous": item.previous_decision.value,
-                "New": item.new_decision.value,
-                "Reason": item.reason_code.value,
-                "Comment": item.comment,
-                "Created by": item.created_by,
-                "Created at": item.created_at,
-                "Engine": item.source_engine_version,
-                "Rule": item.source_decision_rule,
-                "Supersedes": item.supersedes_override_id,
-            }
-            for item in overrides
-        ]
-    ),
-    hide_index=True,
-    width="stretch",
+
+st.subheader(f"Period comparison · {selected_period} vs {comparable_period}")
+comparison_rows = []
+for field in reporting.FINANCIAL_FIELDS:
+    percentage = comparison.percentage_delta[field]
+    comparison_rows.append(
+        {
+            "Metric": field.replace("_", " ").title(),
+            "Current (MAD)": float(getattr(report, field)),
+            "Comparable (MAD)": float(getattr(comparable, field)),
+            "Delta (MAD)": float(comparison.absolute_delta[field]),
+            "Delta (%)": float(percentage) if percentage is not None else None,
+        }
+    )
+st.dataframe(pd.DataFrame(comparison_rows), hide_index=True, use_container_width=True)
+
+st.subheader("Document & operational reporting")
+render_kpis(
+    [
+        ("Total PDFs", f"{document_report.total_pdfs:,}", "Cloudflare R2 registry"),
+        ("Invoices", f"{document_report.invoices:,}", "Current versions"),
+        ("Notes de Débours", f"{document_report.notes_de_debours:,}", "Current versions"),
+        ("Statements", f"{document_report.statements:,}", "Current versions"),
+        ("Publication Failures", f"{document_report.failures:,}", "Actionable exceptions"),
+    ]
 )
+
+publication_by_restaurant: dict[str, int] = {}
+for publication in publications:
+    publication_by_restaurant[publication.restaurant_id] = (
+        publication_by_restaurant.get(publication.restaurant_id, 0) + 1
+    )
+review_by_restaurant = {item.restaurant_id for item in open_issues}
+restaurant_rows = tuple(
+    {
+        "Restaurant": item.restaurant_name,
+        "Restaurant ID": item.restaurant_id,
+        "Period": selected_period,
+        "Sales TTC": float(item.sales_ttc or 0),
+        "Commission Rate": float(item.commission_rate or 0),
+        "Commission HT": float(item.commission_amount or 0),
+        "TVA": float(item.invoice_tva or 0),
+        "Invoice TTC": float(item.invoice_ttc or 0),
+        "Net Payable": float(item.net_payable or 0),
+        "Document Status": f"{publication_by_restaurant.get(item.restaurant_id, 0)}/3",
+        "Review Status": "OPEN" if item.restaurant_id in review_by_restaurant else "CLEAR",
+    }
+    for item in workspace.summary.restaurants
+    if item.sales_ttc is not None
+)
+st.dataframe(pd.DataFrame(restaurant_rows), hide_index=True, use_container_width=True)
+
+st.subheader("Controlled export center")
+exporter = BillingExportService()
+csv_bytes = exporter.period_csv(report)
+xlsx_bytes = exporter.workbook(report, restaurant_rows, review_items, publications)
+csv_column, excel_column = st.columns(2)
+with csv_column:
+    st.download_button(
+        "Download period summary (CSV)",
+        csv_bytes,
+        file_name=f"cashco_{selected_period}_summary.csv",
+        mime="text/csv",
+    )
+with excel_column:
+    st.download_button(
+        "Download billing workbook (Excel)",
+        xlsx_bytes,
+        file_name=f"cashco_{selected_period}_billing.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+st.subheader("Operational audit")
+audit_rows = [
+    {
+        "Occurred At": event.get("occurred_at"),
+        "Event": event.get("event"),
+        "User": event.get("actor_id"),
+        "Restaurant": event.get("restaurant_id"),
+        "Severity": event.get("severity", "INFO"),
+    }
+    for event in review_repository.audit_events(selected_period)
+]
+if audit_rows:
+    st.dataframe(pd.DataFrame(audit_rows), hide_index=True, use_container_width=True)
+else:
+    st.info("No operational audit events match this period yet.")
+
 st.info(
-    "Source operational status and system decision remain unchanged. The latest valid "
-    "override determines the final decision while every prior record remains visible."
+    "Gmail and payment execution are deferred. This center performs no provider or transfer action."
 )
-st.markdown("### Email, authorization and period events")
-st.dataframe(
-    pd.DataFrame(
-        [
-            {
-                "Event": item.event_type,
-                "Actor": item.actor_id,
-                "Period": item.period_id,
-                "Restaurant": item.restaurant_id,
-                "At": item.occurred_at,
-                "Entity": item.entity_type,
-                "Entity ID": item.entity_id,
-                "Result": item.details.get("error_code") or item.details.get("mode") or "—",
-            }
-            for item in email_events
-        ]
-    ),
-    hide_index=True,
-    width="stretch",
-)
-st.caption("Email bodies, RIBs, credentials and provider tokens are never audit-logged.")
-st.markdown("### Document rendering and publication")
-st.dataframe(
-    pd.DataFrame(
-        [
-            {
-                "Event": {
-                    "PUBLISHING": "DOCUMENT_PUBLISH_STARTED",
-                    "PUBLISHED": "DOCUMENT_PUBLISHED",
-                    "FAILED": "DOCUMENT_PUBLISH_FAILED",
-                    "ALREADY_PUBLISHED": "DOCUMENT_ALREADY_PUBLISHED",
-                    "NOT_PUBLISHED": "DOCUMENT_RENDERED",
-                }[item.status.value],
-                "Restaurant ID": item.restaurant_id,
-                "Period": item.period_code,
-                "Document": item.document_type,
-                "Version": item.document_version,
-                "Hash": f"{item.document_hash[:16]}…",
-                "Status": item.status.value,
-                "Result": item.error_code or "—",
-                "Published at": item.published_at,
-            }
-            for item in document_publications
-        ]
-    ),
-    hide_index=True,
-    width="stretch",
-)
-st.caption("No document body, legal identifier, RIB, credential, or token is logged.")
-st.markdown("### Partner Legal Master synchronization")
-st.dataframe(
-    pd.DataFrame(
-        [
-            {
-                "Event": item.event_type,
-                "At": item.occurred_at,
-                "Fingerprint": (
-                    f"{item.fingerprint[:16]}…" if item.fingerprint else None
-                ),
-                "Rows": item.rows,
-                "Matched IDs": item.matched_ids,
-                "Conflicts": item.conflicts,
-                "Affected Readiness": item.affected_readiness_count,
-            }
-            for item in legal_events
-        ]
-    ),
-    hide_index=True,
-    width="stretch",
-)
-st.caption("No RIB, ICE, IF, RC, email body, token, or credential is stored in sync audit events.")
-st.warning("AUTOMATION OFF · Audit history does not authorize downstream actions")

@@ -116,6 +116,21 @@ def resolve_columns(
     return mapping
 
 
+def invoice_scope_schema_health(columns: list[object] | pd.Index) -> dict[str, object]:
+    """Describe required and optional semantics without guessing source headers."""
+    mapping = resolve_columns(columns, INVOICE_SCOPE_ALIASES)
+    required = ("restaurant_id", "commission_rate")
+    missing = tuple(field for field in required if field not in mapping)
+    return {
+        "required_schema_pass": not missing,
+        "missing_required": missing,
+        "restaurant_name_provided": "restaurant_name" in mapping,
+        "restaurant_name_source": (
+            "INVOICE_SCOPE_OR_RST" if "restaurant_name" in mapping else "RST"
+        ),
+    }
+
+
 class RestaurantRegistryBuilder:
     """Build an Invoice-Scope-led registry without fuzzy matching or persistence."""
 
@@ -138,8 +153,20 @@ class RestaurantRegistryBuilder:
             invoice_scope_column_map,
         )
         rst_mapping = resolve_columns(rst.columns, RST_ALIASES, rst_column_map)
-        if "restaurant_name" not in scope_mapping:
-            raise ValueError("Invoice Scope has no configured Restaurant Name column.")
+        missing_required = tuple(
+            field
+            for field in ("restaurant_id", "commission_rate")
+            if field not in scope_mapping
+        )
+        if missing_required:
+            labels = {
+                "restaurant_id": "Restaurant ID",
+                "commission_rate": "Commission",
+            }
+            raise ValueError(
+                "Invoice Scope is missing required columns: "
+                + ", ".join(labels[field] for field in missing_required)
+            )
         rst_records = self._rst_records(rst, rst_mapping)
         by_id, by_name = self._rst_indexes(rst_records)
         controlled_aliases = {
@@ -517,12 +544,12 @@ class RestaurantRegistryBuilder:
         for code, field, message in checks:
             if mapped.get(field) is None:
                 issues.append(cls._issue(code, RegistryIssueSeverity.WARNING, message, source))
-        if mapped.get("commission_rate") is None and source.get("commission_rate") is None:
+        if source.get("commission_rate") is None:
             issues.append(
                 cls._issue(
                     "MISSING_COMMISSION",
-                    RegistryIssueSeverity.WARNING,
-                    "No commission is available in Invoice Scope or RST.",
+                    RegistryIssueSeverity.BLOCKING,
+                    "No authoritative commission is available in Invoice Scope.",
                     source,
                 )
             )
@@ -624,11 +651,7 @@ class RestaurantRegistryBuilder:
             city=chosen.get("city") or source["city"],
             area=chosen.get("area"),
             account_manager=chosen.get("account_manager"),
-            commission_rate=(
-                source["commission_rate"]
-                if source["commission_rate"] is not None
-                else chosen.get("commission_rate")
-            ),
+            commission_rate=source["commission_rate"],
             invoice_scope_commission_rate=source["commission_rate"],
             rst_commission_rate=chosen.get("commission_rate"),
             scope_source_row=int(source["source_row"]),

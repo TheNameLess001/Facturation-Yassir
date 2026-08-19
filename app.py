@@ -22,11 +22,11 @@ navigation = {
         st.Page("pages/03_Partners.py", title="Partners", icon=":material/storefront:"),
         st.Page(
             "pages/02_Settlements.py",
-            title="Settlement",
+            title="Billing Operations",
             icon=":material/receipt_long:",
         ),
         st.Page(
-            "pages/04_Review_Queue.py", title="Review Queue", icon=":material/rule:"
+            "pages/04_Review_Queue.py", title="Review Center", icon=":material/rule:"
         ),
     ],
     "Operations": [
@@ -37,7 +37,7 @@ navigation = {
         st.Page(
             "pages/07_Payments.py", title="Payments", icon=":material/account_balance:"
         ),
-        st.Page("pages/08_Audit.py", title="Audit", icon=":material/history:"),
+        st.Page("pages/08_Audit.py", title="Reports & Audit", icon=":material/analytics:"),
     ],
 }
 if user.role == Role.ADMIN:

@@ -45,6 +45,10 @@ def rst_row(
 
 def build(scope_rows, rst_rows, *, orders=None, order_names=None):
     scope = pd.DataFrame(scope_rows)
+    if "Restaurant ID" not in scope.columns:
+        scope["Restaurant ID"] = None
+    if "Commission" not in scope.columns:
+        scope["Commission"] = "0.20"
     rst = pd.DataFrame(rst_rows)
     return RestaurantRegistryBuilder().build(
         scope,

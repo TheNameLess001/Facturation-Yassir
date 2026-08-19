@@ -7,7 +7,9 @@ from pydantic import BaseModel, ConfigDict
 
 
 class GoLiveStatus(StrEnum):
-    READY_FOR_GO_LIVE_AUTHORIZATION = "READY_FOR_GO_LIVE_AUTHORIZATION"
+    READY_FOR_CANARY_AUTHORIZATION = "READY_FOR_CANARY_AUTHORIZATION"
+    # Compatibility name for callers from Activation 5.
+    READY_FOR_GO_LIVE_AUTHORIZATION = "READY_FOR_CANARY_AUTHORIZATION"
     BLOCKED = "BLOCKED"
 
 
@@ -89,7 +91,7 @@ class GoLiveReadinessPolicy:
             blockers = (*blockers, GoLiveBlocker.PRODUCTION_FLAG_UNSAFELY_ENABLED)
         return GoLiveReadiness(
             status=(
-                GoLiveStatus.READY_FOR_GO_LIVE_AUTHORIZATION
+                GoLiveStatus.READY_FOR_CANARY_AUTHORIZATION
                 if not blockers
                 else GoLiveStatus.BLOCKED
             ),

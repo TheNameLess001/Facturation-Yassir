@@ -10,7 +10,6 @@ from src.auth import AuthService, Permission, RBACService
 from src.config import get_settings
 from src.documents.publishing import (
     DocumentStorageMode,
-    DriveValidationStatus,
     inspect_drive_destination,
     inspect_existing_document_storage_validation,
 )
@@ -86,6 +85,9 @@ go_live = build_go_live_snapshot(
     gmail=capability,
     sandbox=sandbox,
     sandbox_draft=sandbox_drafts[-1] if sandbox_drafts else None,
+    document_storage_ready=(
+        settings.r2_configured
+    ),
 )
 st.markdown(
     f"""<div class="cc-off-banner"><div class="cc-off-title">AUTOMATION · {period_mode.value}</div>
@@ -115,18 +117,13 @@ render_kpis(
         ("Settlement", "READY", f"{snapshot.settlement_ready:,} restaurants"),
         ("Documents", "READY", f"{snapshot.document_ready:,} candidates"),
         (
-            "Drive Publishing",
+            "Document Storage",
             (
                 "READY"
-                if drive_validation
-                and drive_validation.status
-                in {
-                    DriveValidationStatus.PASS,
-                    DriveValidationStatus.ALREADY_VALIDATED,
-                }
+                if settings.r2_configured
                 else "BLOCKED"
             ),
-            f"{storage_mode.value} · {drive_destination.destination_type.value}",
+            f"{settings.document_storage_provider} · Google Drive deprecated",
         ),
         ("Email Packages", "READY", f"{snapshot.email_ready:,} buildable"),
         ("Gmail Authentication", capability.authentication.value, sandbox.auth_method.value),
@@ -149,8 +146,8 @@ render_kpis(
         ("Production Flag", "OFF", "Backend hard stop"),
     ]
 )
-if go_live.readiness.status.value == "READY_FOR_GO_LIVE_AUTHORIZATION":
-    st.success("GO-LIVE · READY FOR AUTHORIZATION · Production SEND remains OFF")
+if go_live.readiness.status.value == "READY_FOR_CANARY_AUTHORIZATION":
+    st.success("GO-LIVE · READY FOR CANARY AUTHORIZATION · Production SEND remains OFF")
 else:
     st.error(
         "GO-LIVE · BLOCKED · "

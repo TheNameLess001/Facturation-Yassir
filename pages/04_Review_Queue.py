@@ -9,9 +9,16 @@ import streamlit as st
 
 from src.auth import AuthService
 from src.config import get_settings
+from src.documents.publishing import DocumentPublicationRepository
 from src.emails.workflow_repository import EmailWorkflowRepository
 from src.google.exceptions import GoogleIntegrationError
 from src.models.enums import FinancialDecision
+from src.operations.review import (
+    ReviewCenterBuilder,
+    ReviewRepository,
+    ReviewSeverity,
+    ReviewStatus,
+)
 from src.restaurants.registry_models import (
     CorrectionConfidence,
     MappingReviewCase,
@@ -485,10 +492,10 @@ def mapping_dialog(
     )
 
 
-page_setup("Review Queue")
+page_setup("Review Center")
 header, action = st.columns([4, 1])
 with header:
-    st.title("Review Queue")
+    st.title("Review / Exception Center")
     st.caption(
         "Identity correction and financial eligibility review · Read-only Google sources"
     )
@@ -503,14 +510,135 @@ with action:
 review_area = st.segmented_control(
     "Review area",
     [
+        "ALL EXCEPTIONS",
         "IDENTITY REVIEW",
         "FINANCIAL REVIEW",
         "COMMISSION REVIEW",
         "LEGAL MASTER",
         "DATA ISSUES",
     ],
-    default="IDENTITY REVIEW",
+    default="ALL EXCEPTIONS",
 )
+if review_area == "ALL EXCEPTIONS":
+    settings = get_settings()
+    periods = SettlementPeriodService(settings.timezone)
+    latest = periods.latest_complete(
+        as_of=datetime.now(ZoneInfo(settings.timezone)).date()
+    )
+    period_code = st.selectbox(
+        "Period", ["2026-07-P2", latest.period_code], key="unified_review_period"
+    )
+    try:
+        workspace = load_financial_review(period_code)
+    except (GoogleIntegrationError, ValueError, OSError) as exc:
+        st.error(f"Review Center is unavailable: {exc}")
+        st.stop()
+    review_repository = ReviewRepository(settings.review_registry_path)
+    publications = DocumentPublicationRepository(
+        settings.document_publication_registry_path
+    ).list_latest_for_period(period_code)
+    review_items = ReviewCenterBuilder().build(
+        workspace, publications, review_repository
+    )
+    open_items = tuple(
+        item
+        for item in review_items
+        if item.status in {ReviewStatus.OPEN, ReviewStatus.IN_REVIEW, ReviewStatus.BLOCKED_EXTERNAL}
+    )
+    render_kpis(
+        [
+            ("Total Open", f"{len(open_items):,}", "Unified queue"),
+            ("Financial Review", f"{sum(item.issue_type.value == 'MANUAL_REVIEW' for item in open_items):,}", "Order decisions"),
+            ("Commission Issues", f"{sum(item.issue_type.value == 'COMMISSION_BLOCKER' for item in open_items):,}", "Invoice Scope authority"),
+            ("Invalid Financial", f"{sum(item.issue_type.value == 'INVALID_FINANCIAL' for item in open_items):,}", "Source correction"),
+            ("Identity", f"{sum(item.issue_type.value == 'IDENTITY_BLOCKER' for item in open_items):,}", "Mapping blockers"),
+            ("Legal Master", f"{sum(item.issue_type.value == 'LEGAL_MASTER_ISSUE' for item in open_items):,}", "Read-only issues"),
+            ("Document Failures", f"{sum('FAILURE' in item.issue_type.value for item in open_items):,}", "Generation / R2"),
+            ("Critical", f"{sum(item.severity == ReviewSeverity.CRITICAL for item in open_items):,}", "Immediate attention"),
+        ]
+    )
+    filters = st.columns(6)
+    issue_filter = filters[0].selectbox(
+        "Issue Type", ["ALL", *sorted({item.issue_type.value for item in review_items})]
+    )
+    severity_filter = filters[1].selectbox(
+        "Severity", ["ALL", *(item.value for item in ReviewSeverity)]
+    )
+    city_filter = filters[2].selectbox(
+        "City", ["ALL", *sorted({item.city for item in review_items if item.city})]
+    )
+    am_filter = filters[3].selectbox(
+        "AM", ["ALL", *sorted({item.account_manager for item in review_items if item.account_manager})]
+    )
+    status_filter = filters[4].selectbox(
+        "Status", ["ALL", *(item.value for item in ReviewStatus)]
+    )
+    search = filters[5].text_input("Search", key="unified_review_search")
+    visible = [
+        item
+        for item in review_items
+        if (issue_filter == "ALL" or item.issue_type.value == issue_filter)
+        and (severity_filter == "ALL" or item.severity.value == severity_filter)
+        and (city_filter == "ALL" or item.city == city_filter)
+        and (am_filter == "ALL" or item.account_manager == am_filter)
+        and (status_filter == "ALL" or item.status.value == status_filter)
+        and (
+            not search
+            or search.casefold()
+            in f"{item.restaurant_name} {item.restaurant_id} {item.description}".casefold()
+        )
+    ]
+    event = st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Restaurant": item.restaurant_name,
+                    "Restaurant ID": item.restaurant_id,
+                    "City": item.city,
+                    "AM": item.account_manager,
+                    "Issue Type": item.issue_type.value,
+                    "Severity": item.severity.value,
+                    "Dimension": item.blocking_dimension,
+                    "Description": item.description,
+                    "Current Value": item.current_value,
+                    "Recommended Action": item.recommended_action,
+                    "Status": item.status.value,
+                    "Retryable": "YES" if item.retryable else "NO",
+                }
+                for item in visible
+            ]
+        ),
+        hide_index=True,
+        width="stretch",
+        selection_mode="single-row",
+        on_select="rerun",
+        key="unified_review_table",
+    )
+    if event.selection.rows:
+        selected_item = visible[event.selection.rows[0]]
+        st.markdown(f"### Review · {selected_item.restaurant_name or selected_item.issue_type.value}")
+        st.info(selected_item.recommended_action)
+        transition = st.selectbox(
+            "New status", list(ReviewStatus), format_func=lambda item: item.value
+        )
+        transition_reason = st.text_area("Decision reason")
+        if st.button(
+            "Save review status",
+            disabled=not transition_reason.strip(),
+            type="primary",
+        ):
+            review_repository.transition(
+                selected_item,
+                transition,
+                actor_id=AuthService(settings).current_user().user_id,
+                reason=transition_reason,
+            )
+            st.cache_data.clear()
+            st.rerun()
+    st.caption(
+        "Issues never disappear silently. Financial overrides remain available in the dedicated Financial Review view."
+    )
+    st.stop()
 if review_area == "LEGAL MASTER":
     try:
         legal_registry = load_registry()
