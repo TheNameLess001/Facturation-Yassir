@@ -15,6 +15,16 @@ GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
 
 
 def _parse_gmail_oauth_user(settings: Settings) -> dict[str, object]:
+    if settings.gmail_oauth_configured:
+        assert settings.gmail_oauth_client_id is not None
+        assert settings.gmail_oauth_client_secret is not None
+        assert settings.gmail_oauth_refresh_token is not None
+        return {
+            "client_id": settings.gmail_oauth_client_id.get_secret_value(),
+            "client_secret": settings.gmail_oauth_client_secret.get_secret_value(),
+            "refresh_token": settings.gmail_oauth_refresh_token.get_secret_value(),
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
     secret = settings.gmail_oauth_user_json
     if secret is None or not secret.get_secret_value().strip():
         raise GoogleConfigurationError("Gmail OAuth user is not configured")

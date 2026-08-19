@@ -5,7 +5,11 @@ import hashlib
 import pytest
 
 from src.config import Settings
-from src.emails.attachments import R2AttachmentLoader, StoredDocument
+from src.emails.attachments import (
+    PublicationAttachmentLoader,
+    R2AttachmentLoader,
+    StoredDocument,
+)
 from src.emails.gmail_adapter import FakeGmailAdapter
 from src.emails.packages import PartnerEmailPackageFactory
 from src.emails.phase10_models import DocumentAttachmentRef
@@ -51,6 +55,9 @@ def _settings(tmp_path=None, **updates):
     values = {
         "_env_file": None,
         "gmail_auth_mode": "OAUTH",
+        "gmail_oauth_client_id": "synthetic-client-id",
+        "gmail_oauth_client_secret": "synthetic-client-secret",
+        "gmail_oauth_refresh_token": "synthetic-refresh-token",
         "gmail_sender_email": "billing@example.com",
         "gmail_execution_mode": "SANDBOX",
         "gmail_sandbox_recipient": "internal@example.com",
@@ -76,6 +83,20 @@ def test_disabled_defaults_and_plain_service_account_are_blocked() -> None:
         == GmailAuthMethod.SERVICE_ACCOUNT_WITHOUT_DELEGATION
     )
     assert not inspect_gmail_sandbox(plain_sa).draft_execution_allowed
+
+
+def test_separate_oauth_environment_configuration_is_complete_without_json() -> None:
+    settings = _settings(gmail_oauth_user_json=None)
+    assert settings.gmail_oauth_configured
+    capability = inspect_gmail_sandbox(settings)
+    assert capability.authentication_configured
+    assert capability.draft_execution_allowed
+
+
+def test_partial_or_legacy_oauth_is_not_accepted_by_final_canary() -> None:
+    partial = _settings(gmail_oauth_refresh_token=None, gmail_oauth_user_json=None)
+    assert not partial.gmail_oauth_configured
+    assert not inspect_gmail_sandbox(partial).draft_execution_allowed
 
 
 @pytest.mark.parametrize(
@@ -157,6 +178,13 @@ def test_r2_attachment_hash_drift_is_blocked() -> None:
         R2AttachmentLoader(_R2({key: item}), {ref.document_id: key})._load_one(
             package, ref
         )
+
+
+def test_publication_attachment_loader_requires_three_current_documents() -> None:
+    package = _package()
+    incomplete = package.model_copy(update={"document_refs": package.document_refs[:2]})
+    with pytest.raises(ValueError, match="EMAIL_PACKAGE_INCOMPLETE"):
+        PublicationAttachmentLoader(object(), object()).load(incomplete)
 
 
 def test_exact_sandbox_draft_is_idempotent_and_never_sends(tmp_path) -> None:

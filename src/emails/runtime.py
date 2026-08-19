@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from uuid import NAMESPACE_URL, uuid5
 
 from src.config import Settings, get_settings
 from src.documents.phase8 import (
@@ -10,6 +9,7 @@ from src.documents.phase8 import (
     Phase8DocumentEngine,
     ProductionDocumentStatus,
 )
+from src.documents.publishing import DocumentPublicationRepository
 from src.emails.packages import (
     PartnerEmailPackageFactory,
     resolve_recipient,
@@ -39,6 +39,7 @@ class EmailCenterRow:
     account_manager: str | None
     chain: str | None
     recipient: str | None
+    recipient_source: str | None
     financial_status: str
     document_status: str
     email_status: str
@@ -100,6 +101,9 @@ def build_email_center_snapshot(
         if item.restaurant_id
     }
     document_engine = Phase8DocumentEngine()
+    publication_repository = DocumentPublicationRepository(
+        settings.document_publication_registry_path
+    )
     package_factory = PartnerEmailPackageFactory()
     policy = ProductionReadinessPolicy()
     rows: list[EmailCenterRow] = []
@@ -116,21 +120,42 @@ def build_email_center_snapshot(
             )
             for document_type in CashCoDocumentType
         )
-        document_refs = tuple(
-            DocumentAttachmentRef(
-                document_type=candidate.document_type.value,
-                document_id=str(
-                    uuid5(
-                        NAMESPACE_URL,
-                        f"{settlement.period_code}:{settlement.restaurant_id}:"
-                        f"{candidate.document_type.value}:v{candidate.document_version}",
-                    )
-                ),
-                version=candidate.document_version,
-                content_hash=candidate.document_hash,
-                status=candidate.status.value,
+        current_publications = {
+            candidate.document_type.value: publication_repository.current(
+                settlement.period_code,
+                settlement.restaurant_id,
+                candidate.document_type.value,
             )
             for candidate in document_candidates
+        }
+        published_refs = tuple(
+            DocumentAttachmentRef(
+                document_type=candidate.document_type.value,
+                document_id=str(publication.publication_id),
+                version=publication.document_version,
+                content_hash=publication.document_hash,
+                status=publication.status.value,
+            )
+            for candidate in document_candidates
+            if (publication := current_publications[candidate.document_type.value])
+            is not None
+            and publication.document_hash == candidate.document_hash
+            and publication.financial_snapshot_hash
+            == candidate.financial_snapshot_hash
+        )
+        document_refs = (
+            published_refs
+            if settings.document_storage_provider == "R2"
+            else tuple(
+                DocumentAttachmentRef(
+                    document_type=candidate.document_type.value,
+                    document_id=candidate.document_reference,
+                    version=candidate.document_version,
+                    content_hash=candidate.document_hash,
+                    status=candidate.status.value,
+                )
+                for candidate in document_candidates
+            )
         )
         package = package_factory.create(
             period_code=settlement.period_code,
@@ -160,9 +185,14 @@ def build_email_center_snapshot(
                 legal_data_ready=document_readiness.legal_ready,
                 document_ready=(
                     document_readiness.status == DocumentReadinessStatus.READY
+                    and len(document_refs) == 3
                     and all(
-                        item.status == ProductionDocumentStatus.PRODUCTION_READY
-                        for item in document_candidates
+                        item.status
+                        in {
+                            "PUBLISHED",
+                            ProductionDocumentStatus.PRODUCTION_READY.value,
+                        }
+                        for item in document_refs
                     )
                 ),
                 email_status=recipient.status,
@@ -187,6 +217,7 @@ def build_email_center_snapshot(
                 account_manager=restaurant.account_manager,
                 chain=restaurant.chain,
                 recipient=recipient.recipient_to,
+                recipient_source=recipient.source_field,
                 financial_status=settlement.settlement_status.value,
                 document_status=document_readiness.status.value,
                 email_status=recipient.status.value,

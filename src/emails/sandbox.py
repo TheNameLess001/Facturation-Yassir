@@ -79,7 +79,7 @@ class GmailSandboxCapability:
 
 
 def inspect_gmail_sandbox(settings: Settings) -> GmailSandboxCapability:
-    if settings.gmail_auth_mode == "OAUTH":
+    if settings.gmail_auth_mode == "OAUTH" or settings.gmail_oauth_configured:
         method = GmailAuthMethod.OAUTH_USER
     elif settings.gmail_auth_mode == "DOMAIN_DELEGATION":
         method = GmailAuthMethod.DOMAIN_WIDE_DELEGATION
@@ -94,7 +94,14 @@ def inspect_gmail_sandbox(settings: Settings) -> GmailSandboxCapability:
     auth_configured = method in {
         GmailAuthMethod.OAUTH_USER,
         GmailAuthMethod.DOMAIN_WIDE_DELEGATION,
-    }
+    } and (
+        method != GmailAuthMethod.OAUTH_USER
+        or settings.gmail_oauth_configured
+        or bool(
+            settings.gmail_oauth_user_json
+            and settings.gmail_oauth_user_json.get_secret_value().strip()
+        )
+    )
     return GmailSandboxCapability(
         execution_mode=mode,
         auth_method=method,

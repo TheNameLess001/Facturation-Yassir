@@ -137,6 +137,7 @@ def enabled_settings(tmp_path, **changes) -> Settings:
         "email_allow_drafts": True,
         "email_allow_send": True,
         "production_email_send_enabled": True,
+        "gmail_execution_mode": "PRODUCTION",
         "email_workflow_registry_path": tmp_path / "email.sqlite3",
     }
     values.update(changes)
@@ -151,7 +152,7 @@ def authorize(repo: EmailWorkflowRepository, packages):
         packages=tuple(packages),
         eligible_restaurant_count=len(packages),
         blocked_restaurant_count=0,
-        confirmation_text=f"SEND {PERIOD}",
+        confirmation_text=f"SEND CASHCO {PERIOD}",
     )
 
 

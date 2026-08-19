@@ -85,6 +85,11 @@ except (GoogleIntegrationError, ValueError, OSError) as exc:
     st.stop()
 
 st.markdown(f"### {snapshot.period_code} · {snapshot.period_status.value}")
+if sandbox.execution_mode.value == "SANDBOX":
+    st.warning(
+        "SANDBOX MODE · All provider recipients are overridden to the configured "
+        "sandbox mailbox. Production sending is OFF."
+    )
 st.markdown(
     """<div class="cc-off-banner"><div class="cc-off-title">PRODUCTION SEND · DISABLED</div>
     <div class="cc-off-copy">Preview is side-effect free. No Gmail draft or external message can be created with the current backend flags.</div></div>""",
@@ -136,6 +141,7 @@ frame = pd.DataFrame(
             "Restaurant ID": row.restaurant_id,
             "Period": snapshot.period_code,
             "Production Recipient": row.recipient or "—",
+            "Recipient Source": row.recipient_source or "—",
             "Sandbox Recipient": sandbox.sandbox_recipient or "—",
             "Actual delivery target": (
                 sandbox.sandbox_recipient

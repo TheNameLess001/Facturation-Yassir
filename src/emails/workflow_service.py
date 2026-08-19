@@ -79,6 +79,9 @@ class Phase10EmailWorkflowService:
         retry: bool = False,
     ) -> SendAttempt:
         self.rbac.require(user, Permission.SEND_EMAIL)
+        if self.settings.gmail_execution_mode != "PRODUCTION":
+            self._audit("PRODUCTION_SEND_BLOCKED", user, package)
+            raise ProductionSendDisabledError("GMAIL_PRODUCTION_MODE_REQUIRED")
         if not (
             self.settings.email_allow_send
             and self.settings.production_email_send_enabled

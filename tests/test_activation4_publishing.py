@@ -257,6 +257,9 @@ def test_sandbox_recipient_replaces_production_recipient_and_prefixes_subject() 
     settings = Settings(
         _env_file=None,
         gmail_auth_mode="OAUTH",
+        gmail_oauth_client_id="synthetic-id",
+        gmail_oauth_client_secret="synthetic-secret",
+        gmail_oauth_refresh_token="synthetic-token",
         gmail_sender_email="cashco@example.test",
         gmail_execution_mode="SANDBOX",
         gmail_sandbox_recipient="sandbox@example.test",
@@ -361,6 +364,9 @@ def test_sandbox_draft_is_recipient_safe_draft_only_and_idempotent(tmp_path) -> 
     settings = Settings(
         _env_file=None,
         gmail_auth_mode="OAUTH",
+        gmail_oauth_client_id="synthetic-id",
+        gmail_oauth_client_secret="synthetic-secret",
+        gmail_oauth_refresh_token="synthetic-token",
         gmail_sender_email="cashco@example.test",
         gmail_execution_mode="SANDBOX",
         gmail_sandbox_recipient="sandbox@example.test",
@@ -505,6 +511,9 @@ def test_gmail_profile_must_match_explicit_sender() -> None:
     settings = Settings(
         _env_file=None,
         gmail_auth_mode="OAUTH",
+        gmail_oauth_client_id="synthetic-id",
+        gmail_oauth_client_secret="synthetic-secret",
+        gmail_oauth_refresh_token="synthetic-token",
         gmail_sender_email="cashco@example.test",
     )
     matched = validate_gmail_capability(
@@ -560,6 +569,9 @@ def test_full_sandbox_rehearsal_publishes_one_restaurant_and_creates_one_draft(
     settings = Settings(
         _env_file=None,
         gmail_auth_mode="OAUTH",
+        gmail_oauth_client_id="synthetic-id",
+        gmail_oauth_client_secret="synthetic-secret",
+        gmail_oauth_refresh_token="synthetic-token",
         gmail_sender_email="cashco@example.test",
         gmail_execution_mode="SANDBOX",
         gmail_sandbox_recipient="sandbox@example.test",
